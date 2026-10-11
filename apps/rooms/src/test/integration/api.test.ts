@@ -6497,3 +6497,77 @@ describe('sweep cron', () => {
 		expect(await inviterIds()).toEqual([])
 	})
 })
+
+it('2026 room experience retains upstream progression in the native object shape', async () => {
+	await seedRoomWithSubRooms(env.DB, {
+		RoomId: 900092,
+		Name: '2026ExperienceTest',
+		CreatorAccountId: 42,
+		SubRooms: [],
+	})
+	const res = await SELF.fetch(`${ORIGIN}/rooms/900092/experience/player`, {
+		headers: await bearer('42', undefined, '20260323.14'),
+	})
+	expect(res.status).toBe(200)
+	expect(await res.json()).toEqual({
+		RoomExperienceEnabled: false,
+		Experience: 0,
+		ConcurrencyCode: expect.any(String),
+	})
+})
+
+describe('Studio baked Unity asset downloads', () => {
+	const mainId = 'aa0320e1-2e47-4cf5-9129-5366c3c5f824'
+	const childId = 'e6da76fb-f990-4299-8724-d786f5723a5a'
+	const filename = 'imports/test-room/main.SubRoom.Main.0.5.assetbundle'
+	beforeAll(async () => {
+		await seedRoomWithSubRooms(env.DB, {
+			RoomId: 900090,
+			Name: 'StudioDownloadTest',
+			CreatorAccountId: 1,
+			Accessibility: 1,
+			SubRooms: [
+				{
+					SubRoomId: 900090,
+					RoomId: 900090,
+					Name: 'Home',
+					CurrentSave: {
+						UnityAssetId: mainId,
+						UnityAsset: filename,
+						UnityAssetHash: 'main-hash',
+						DataBlob: 'scene.room',
+						UnitySubAssets: [
+							{
+								UnityAssetId: childId,
+								UnityAsset: 'child.SubRoom.SubAsset.0.5.assetbundle',
+								UnityAssetHash: 'child-hash',
+							},
+						],
+					},
+				},
+			],
+		})
+	})
+
+	it('returns the Studio loader DTO with its main bundle and dependencies', async () => {
+		const row = await env.DB.prepare(
+			'SELECT current_save_id FROM subroom WHERE sub_room_id=900090'
+		).first<{ current_save_id: number }>()
+		const res = await SELF.fetch(
+			`${ORIGIN}/rooms/900090/subrooms/900090/saves/${row!.current_save_id}`,
+			{ headers: await bearer('1') }
+		)
+		expect(res.status).toBe(200)
+		expect(await res.json()).toMatchObject({
+			UnityAsset: filename,
+			UnityAssetHash: 'main-hash',
+			UnitySubAssets: [
+				{
+					UnityAssetId: childId,
+					UnityAsset: 'child.SubRoom.SubAsset.0.5.assetbundle',
+					UnityAssetHash: 'child-hash',
+				},
+			],
+		})
+	})
+})

@@ -3871,7 +3871,17 @@ const app = new Hono<App>()
 			if (!(await canReadSaves(c, room, roomId, accountId))) return c.body(null, 403)
 
 			const save = await getSubRoomSaveById(c.env.DB, subRoomId, saveId)
-			return save ? c.json(toSaveDetail(save, unityAssetTargetQuery(c))) : c.notFound()
+			if (!save) return c.notFound()
+			const target = unityAssetTargetQuery(c)
+			// Imported pre-Studio saves name their main/dependency bundles directly.
+			// Keep upstream's target-aware Studio projection for its built assets.
+			if (
+				typeof save.UnityAsset === 'string' &&
+				!pickBakedBundle(save, target) &&
+				(target === null || target === 0)
+			)
+				return c.json(save)
+			return c.json(toSaveDetail(save, target))
 		}
 	)
 
