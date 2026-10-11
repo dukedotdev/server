@@ -32,6 +32,106 @@ testCaseManagementRoutes.use(`${ROOT}/*`, async (c, next) => {
 	if (!(await authedRoles(c))?.includes('developer')) return c.body(null, 403)
 	await next()
 })
+type TodoRow = {
+	id: string
+	title: string
+	completed: number
+	created_by: number
+	created_at: string
+	updated_at: string
+	case_id: string | null
+}
+function todoDto(row: TodoRow) {
+	return {
+		Id: row.id,
+		Title: row.title,
+		Completed: Boolean(row.completed),
+		CreatedBy: row.created_by,
+		CreatedAt: row.created_at,
+		UpdatedAt: row.updated_at,
+		CaseId: row.case_id,
+	}
+}
+testCaseManagementRoutes.get(`${ROOT}/todos`, async (c) => {
+	const rows = await c.env.DB.prepare(
+		'SELECT t.*, c.title, CASE WHEN c.status = 3 THEN 1 ELSE 0 END AS completed FROM tcm_todo t JOIN tcm_case c ON c.id = t.case_id ORDER BY completed, t.created_at, t.id'
+	).all<TodoRow>()
+	return c.json(rows.results.map(todoDto))
+})
+testCaseManagementRoutes.post(`${ROOT}/todos`, async (c) => {
+	const body = await c.req.json<unknown>().catch(() => null)
+	if (
+		!body ||
+		typeof body !== 'object' ||
+		!('Title' in body) ||
+		typeof body.Title !== 'string' ||
+		!body.Title.trim() ||
+		body.Title.length > 2000
+	)
+		return c.body(null, 400)
+	const pass = await c.env.DB.prepare(
+		'SELECT id FROM tcm_pass WHERE end_date IS NULL AND manually_closed = 0 ORDER BY id DESC LIMIT 1'
+	).first<{ id: number }>()
+	if (!pass) return c.body(null, 409)
+	const id = crypto.randomUUID(),
+		caseId = `TODO-${id}`,
+		accountId = (await authedId(c))!
+	await c.env.DB.batch([
+		c.env.DB.prepare(
+			'INSERT INTO tcm_case (id, pass_id, title, description, status, assigned_account_id) VALUES (?, ?, ?, ?, 1, ?)'
+		).bind(caseId, pass.id, body.Title.trim(), 'Test checklist item.', accountId),
+		c.env.DB.prepare(
+			'INSERT INTO tcm_todo (id, title, created_by, case_id) VALUES (?, ?, ?, ?)'
+		).bind(id, body.Title.trim(), accountId, caseId),
+	])
+	const row = await c.env.DB.prepare('SELECT * FROM tcm_todo WHERE id = ?')
+		.bind(id)
+		.first<TodoRow>()
+	return c.json(todoDto(row!), 201)
+})
+testCaseManagementRoutes.patch(`${ROOT}/todos/:id`, async (c) => {
+	const body = await c.req.json<unknown>().catch(() => null)
+	if (!body || typeof body !== 'object' || (!('Title' in body) && !('Completed' in body)))
+		return c.body(null, 400)
+	if (
+		'Title' in body &&
+		(typeof body.Title !== 'string' || !body.Title.trim() || body.Title.length > 2000)
+	)
+		return c.body(null, 400)
+	if ('Completed' in body && typeof body.Completed !== 'boolean') return c.body(null, 400)
+	const title = 'Title' in body ? (body.Title as string).trim() : null
+	const completed = 'Completed' in body ? Number(body.Completed) : null
+	const existing = await c.env.DB.prepare('SELECT * FROM tcm_todo WHERE id = ?')
+		.bind(c.req.param('id'))
+		.first<TodoRow>()
+	if (!existing) return c.body(null, 404)
+	await c.env.DB.batch([
+		c.env.DB.prepare(
+			'UPDATE tcm_case SET title = COALESCE(?, title), status = COALESCE(?, status) WHERE id = ?'
+		).bind(title, completed === null ? null : completed ? 3 : 1, existing.case_id),
+		c.env.DB.prepare(
+			"UPDATE tcm_todo SET title = COALESCE(?, title), completed = COALESCE(?, completed), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? RETURNING *"
+		).bind(title, completed, existing.id),
+	])
+	const row = await c.env.DB.prepare(
+		'SELECT t.*, c.title, CASE WHEN c.status = 3 THEN 1 ELSE 0 END AS completed FROM tcm_todo t JOIN tcm_case c ON c.id = t.case_id WHERE t.id = ?'
+	)
+		.bind(existing.id)
+		.first<TodoRow>()
+	return row ? c.json(todoDto(row)) : c.body(null, 404)
+})
+testCaseManagementRoutes.delete(`${ROOT}/todos/:id`, async (c) => {
+	const row = await c.env.DB.prepare('SELECT * FROM tcm_todo WHERE id = ?')
+		.bind(c.req.param('id'))
+		.first<TodoRow>()
+	if (!row) return c.body(null, 404)
+	await c.env.DB.batch([
+		c.env.DB.prepare('DELETE FROM tcm_todo WHERE id = ?').bind(row.id),
+		c.env.DB.prepare('DELETE FROM tcm_comment WHERE case_id = ?').bind(row.case_id),
+		c.env.DB.prepare('DELETE FROM tcm_case WHERE id = ?').bind(row.case_id),
+	])
+	return c.body(null, 204)
+})
 async function caseDto(db: D1Database, row: CaseRow, domain: string) {
 	const assigned =
 		row.assigned_account_id === null ? null : await getAccount(db, row.assigned_account_id)

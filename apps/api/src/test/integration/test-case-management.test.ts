@@ -5,6 +5,7 @@ import { beforeAll, expect, it } from 'vitest'
 import { SCHEMA_DDL as ACCOUNT_SCHEMA_DDL } from '@repo/domain/src/accounts-db'
 
 import migration from '../../../migrations/0035_test_case_management.sql?raw'
+import todoMigration from '../../../migrations/0036_test_case_todos.sql?raw'
 
 const ROOT = 'https://api.recflare.net/api/testcasemanagement/v1'
 beforeAll(async () => {
@@ -13,7 +14,7 @@ beforeAll(async () => {
 	await env.DB.prepare('INSERT INTO account (data) VALUES (?)')
 		.bind(JSON.stringify({ accountId: 42, username: 'Tester', displayName: 'Test Developer' }))
 		.run()
-	for (const sql of migration
+	for (const sql of (migration + todoMigration)
 		.split(';')
 		.map((s) => s.trim())
 		.filter(Boolean))
@@ -29,7 +30,63 @@ beforeAll(async () => {
 			.bind(`TEST-${id}`, `Case ${id}`, 'Synthetic test case')
 			.run()
 })
-
+it('persists a separate checklist through create, edit, complete, reopen and delete', async () => {
+	const request = async (path: string, method = 'GET', body?: unknown, developer = true) =>
+		SELF.fetch(`${ROOT}/todos${path}`, {
+			method,
+			headers: await headers(developer),
+			body: body === undefined ? undefined : JSON.stringify(body),
+		})
+	expect((await SELF.fetch(`${ROOT}/todos`)).status).toBe(401)
+	expect((await request('', 'POST', { Title: 'Denied' }, false)).status).toBe(403)
+	expect((await request('', 'POST', { Title: ' ' })).status).toBe(400)
+	const created = await request('', 'POST', { Title: ' Verify two-client voice ' })
+	expect(created.status).toBe(201)
+	const todo = await created.json<{
+		Id: string
+		Title: string
+		Completed: boolean
+		CaseId: string
+	}>()
+	expect(todo).toEqual(
+		expect.objectContaining({ Title: 'Verify two-client voice', Completed: false, CreatedBy: 42 })
+	)
+	expect(await (await request('')).json()).toEqual([todo])
+	const nativeCase = await SELF.fetch(`${ROOT}/testcase/${todo.CaseId}`, {
+		headers: await headers(),
+	})
+	expect(await nativeCase.json()).toEqual(
+		expect.objectContaining({ Status: 1, AssignedPlayerNames: ['_Tester'] })
+	)
+	expect((await request(`/${todo.Id}`, 'PATCH', { Completed: 'true' })).status).toBe(400)
+	const completed = await request(`/${todo.Id}`, 'PATCH', {
+		Title: 'Verify remote voice',
+		Completed: true,
+	})
+	expect(await completed.json()).toEqual(
+		expect.objectContaining({ Title: 'Verify remote voice', Completed: true })
+	)
+	const reopened = await request(`/${todo.Id}`, 'PATCH', { Completed: false })
+	expect(await reopened.json()).toEqual(
+		expect.objectContaining({ Title: 'Verify remote voice', Completed: false })
+	)
+	const inGameResult = await SELF.fetch(`${ROOT}/testcase/${todo.CaseId}/status`, {
+		method: 'POST',
+		headers: await headers(),
+		body: '3',
+	})
+	expect(inGameResult.status).toBe(200)
+	expect(await (await request('')).json()).toEqual([
+		expect.objectContaining({ Id: todo.Id, Completed: true }),
+	])
+	expect((await request(`/${todo.Id}`, 'PATCH', { Completed: false }, false)).status).toBe(403)
+	expect((await request(`/${todo.Id}`, 'DELETE', undefined, false)).status).toBe(403)
+	const plan = await SELF.fetch(`${ROOT}/testplans`, { headers: await headers() })
+	expect(await plan.json()).toEqual([expect.objectContaining({ NumUntestedTestCases: 6 })])
+	expect((await request(`/${todo.Id}`, 'DELETE')).status).toBe(204)
+	expect(await (await request('')).json()).toEqual([])
+	expect((await request(`/${todo.Id}`, 'PATCH', { Completed: true })).status).toBe(404)
+})
 async function headers(developer = true, sub = '42') {
 	return {
 		Authorization: `Bearer ${await sign({ sub, role: developer ? ['developer'] : ['gameClient'], exp: Math.floor(Date.now() / 1000) + 3600 }, 'tcm-test-key', 'HS256')}`,
