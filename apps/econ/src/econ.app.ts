@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { describeRoute, openAPIRouteHandler } from 'hono-openapi'
 import { useWorkersLogger } from 'workers-tagged-logger'
+import { z } from 'zod'
 
 import {
 	addXp,
@@ -4720,8 +4721,30 @@ const app = new Hono<App>({ strict: false })
 	)
 	.get(
 		'/econ/roomOffer/room/:roomId/purchaseCounts',
-		listRoute('Per-offer purchase counts for a room', 'Empty stub'),
-		(c) => c.json([])
+		describeRoute({
+			summary: 'Per-offer purchase counts for a room',
+			responses: {
+				200: json(
+					z.union([
+						JsonArray,
+						z.object({
+							Value: JsonArray,
+							Success: z.boolean(),
+							Error: z.string().nullable(),
+							error_id: z.string().nullable(),
+						}),
+					]),
+					'2026: RecNet result envelope; older builds: a list'
+				),
+			},
+		}),
+		async (c) => {
+			if (((await authedBuild(c)) ?? 0) >= 20260323) {
+				// The 2026 client decodes RecNetResultListObject<RoomOfferPurchaseCountDTO>.
+				return c.json({ Value: [], Success: true, Error: null, error_id: null })
+			}
+			return c.json([])
+		}
 	)
 	.get(
 		'/econ/roomGiftDropShops/room/:roomId',

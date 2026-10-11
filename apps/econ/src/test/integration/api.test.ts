@@ -3338,6 +3338,14 @@ describe('econ endpoints', () => {
 		expect(await shop(92)).toEqual([])
 	})
 
+	test('2026 room-offer purchase counts use the captured result envelope', async () => {
+		const res = await exports.default.fetch(`${ORIGIN}/econ/roomOffer/room/92/purchaseCounts`, {
+			headers: await bearer('42', undefined, '20260323.14'),
+		})
+		expect(res.status).toBe(200)
+		expect(await res.json()).toEqual({ Value: [], Success: true, Error: null, error_id: null })
+	})
+
 	test('POST /api/ugcPurchasables/v1/items/bulk resolves custom avatar items, echoing RoomId', async () => {
 		const item = await createCustomAvatarItem(env.DB, {
 			customAvatarItemId: crypto.randomUUID(),
