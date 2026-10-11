@@ -716,6 +716,21 @@ describe('public endpoints', () => {
 		).toBe(401)
 	})
 
+	test('employee badge is selectable only by a verified developer and remains a pin, not a giveable cheer', async () => {
+		const pin = async (roles: string[]) =>
+			exports.default.fetch(`${ORIGIN}/api/PlayerCheer/v1/SetSelectedCheer`, {
+				method: 'POST',
+				headers: await bearer('7145', roles),
+				body: new URLSearchParams({ CheerCategory: '9000' }),
+			})
+		expect(await (await pin(['gameClient'])).json()).toMatchObject({ Success: false })
+		expect((await getReputation(env.DB, 7145)).SelectedCheer).toBe(0)
+		expect(await (await pin(['developer'])).json()).toMatchObject({ Success: true })
+		expect((await getReputation(env.DB, 7145)).SelectedCheer).toBe(9000)
+		expect(
+			await (await cheer({ PlayerIdTo: '7146', CheerCategory: '9000' }, '7145')).json()
+		).toMatchObject({ Success: false })
+	})
 	test('cheering needs a token', async () => {
 		const res = await exports.default.fetch(`${ORIGIN}/api/PlayerCheer/v1/create`, {
 			method: 'POST',
