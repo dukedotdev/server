@@ -4924,7 +4924,14 @@ const app = new Hono<App>({ strict: false })
 		async (c) => {
 			const id = await authedId(c)
 			if (id === null) return unauthorized(c)
-			return c.json(await getConsumables(c.env.DB, id))
+			const consumables = await getConsumables(c.env.DB, id)
+			// These rows are purchases of built-in store items. The 2026 client
+			// includes this flag in the instance key and verifies it against the definition.
+			return c.json(
+				((await authedBuild(c)) ?? 0) >= 20260323
+					? consumables.map((item) => ({ ...item, IsRRO: true }))
+					: consumables
+			)
 		}
 	)
 

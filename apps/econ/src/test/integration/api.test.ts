@@ -3713,6 +3713,24 @@ describe('econ endpoints', () => {
 		expect(bad.status).toBe(400)
 	})
 
+	test('2026 owned built-in consumables include the definition identity flag', async () => {
+		await grantConsumable(env.DB, 9731, 'test-built-in', 3)
+		try {
+			for (const version of ['20260323.14', '20250718.01']) {
+				const res = await exports.default.fetch(`${ORIGIN}/api/consumables/v2/getUnlocked`, {
+					headers: await bearer('9731', undefined, version),
+				})
+				expect(res.status).toBe(200)
+				const [item] = (await res.json()) as Array<Record<string, unknown>>
+				expect(item.Count).toBe(3)
+				if (version === '20260323.14') expect(item.IsRRO).toBe(true)
+				else expect(item).not.toHaveProperty('IsRRO')
+			}
+		} finally {
+			await env.DB.prepare('DELETE FROM consumable WHERE account_id = ?').bind(9731).run()
+		}
+	})
+
 	test('GET /api/consumables/v2/getUnlocked 401s without a token, returns []', async () => {
 		const anon = await exports.default.fetch(`${ORIGIN}/api/consumables/v2/getUnlocked`)
 		expect(anon.status).toBe(401)
