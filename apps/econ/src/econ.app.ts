@@ -6668,13 +6668,41 @@ const app = new Hono<App>({ strict: false })
 		}
 	)
 
-	// The subscription seasons running right now (the RR+ seasonal reward tracks). Nothing
-	// here runs a season, so this is an empty-list stub — the client reads it as "no season
-	// in progress" and skips the seasonal UI, where a 404 stalls the RR+ page load.
+	// The 2026 decoder requires an object; RecNet rejects JSON null as an empty response.
 	.get(
 		'/api/subscriptionseasons/v1/seasons/current',
-		listRoute('Current subscription seasons', 'Empty stub — no RR+ season is running'),
-		(c) => c.json([])
+		describeRoute({
+			summary: 'Current subscription season',
+			responses: {
+				200: json(
+					z.union([
+						JsonArray,
+						z.object({
+							SubscriptionSeasonId: z.string().uuid(),
+							Name: z.string(),
+							ImageName: z.string(),
+							StartAt: z.string(),
+							NextSeasonStart: z.string().nullable(),
+							Milestones: JsonArray,
+						}),
+					]),
+					'2026: season object without milestones; older builds: []'
+				),
+			},
+		}),
+		async (c) =>
+			c.json(
+				((await authedBuild(c)) ?? 0) >= 20260323
+					? {
+							SubscriptionSeasonId: '00000000-0000-0000-0000-000000000000',
+							Name: '',
+							ImageName: '',
+							StartAt: '0001-01-01T00:00:00Z',
+							NextSeasonStart: null,
+							Milestones: [],
+						}
+					: []
+			)
 	)
 
 	// Whether the caller can start a Maker AI free trial. Always false, mirroring the

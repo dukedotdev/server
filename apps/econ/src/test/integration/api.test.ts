@@ -8282,3 +8282,18 @@ describe('discord role gift', () => {
 		expect(await getPendingGifts(env.DB, 9322)).toHaveLength(1)
 	})
 })
+
+test('2026 current subscription season supplies a nonempty disabled-season DTO', async () => {
+	const res = await exports.default.fetch(`${ORIGIN}/api/subscriptionseasons/v1/seasons/current`, {
+		headers: await bearer('42', undefined, '20260323.14'),
+	})
+	expect(res.status).toBe(200)
+	expect(await res.json()).toEqual({
+		SubscriptionSeasonId: '00000000-0000-0000-0000-000000000000',
+		Name: '',
+		ImageName: '',
+		StartAt: '0001-01-01T00:00:00Z',
+		NextSeasonStart: null,
+		Milestones: [],
+	})
+})
