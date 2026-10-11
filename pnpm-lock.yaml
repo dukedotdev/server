@@ -661,6 +661,19 @@ importers:
         specifier: 4.128.0
         version: 4.128.0
 
+  apps/gamelogs:
+    dependencies:
+      bugreporting:
+        specifier: workspace:*
+        version: link:../bugreporting
+    devDependencies:
+      '@repo/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
+      wrangler:
+        specifier: 4.128.0
+        version: 4.128.0
+
   apps/img:
     dependencies:
       '@cf-wasm/photon':
