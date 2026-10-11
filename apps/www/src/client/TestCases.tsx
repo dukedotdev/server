@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { call, isDeveloper, where } from './api'
+import { TestTodos } from './TestTodos'
 
 interface TestCase {
 	Id: string
@@ -114,6 +115,7 @@ export function TestCasesPage({
 				<p className="error">Developer access is required.</p>
 			) : (
 				<>
+					<TestTodos onChange={() => load(true)} />
 					<p>
 						<button onClick={() => navigate('/testcases')}>All test runs</button>{' '}
 						<button disabled={pending} onClick={() => void load()}>
