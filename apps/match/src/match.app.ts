@@ -539,8 +539,8 @@ function redactInstanceForPresence(instance: RoomInstance) {
 /**
  * The SubscriptionUpdatePresence message a friend receives when the player changes rooms:
  * a presence snapshot of who, and the redacted instance they're now in (null when in no
- * room → `isOnline` false). `statusVisibility` is forced to 0 (Everyone) so the player
- * isn't hidden from friends. `appVersion` is the subject's own build (from their presence
+ * room → `isOnline` false). `statusVisibility` follows the saved preference so clients
+ * apply their native visibility rules. `appVersion` is the subject's own build (from their presence
  * row) and MUST be a string — the client's presence DTO reads it with a string reader, and
  * a numeric value aborts the whole SignalR frame ("expected String Begin Token"), dropping
  * the room/presence update.
@@ -548,11 +548,12 @@ function redactInstanceForPresence(instance: RoomInstance) {
 function presenceUpdateMessage(
 	playerId: number,
 	instance: RoomInstance | null,
-	appVersion?: string | null
+	appVersion?: string | null,
+	statusVisibility = 0
 ) {
 	return {
 		playerId,
-		statusVisibility: 0,
+		statusVisibility,
 		deviceClass: 0,
 		vrMovementMode: 0,
 		roomInstance: instance ? redactInstanceForPresence(instance) : null,
@@ -584,7 +585,12 @@ async function notifyFriendsPresence(env: Env, playerId: number): Promise<void> 
 		await env.RECFLARE_NOTIFICATIONS_HUB.getByName(HUB_INSTANCE).notifyPlayersEphemeral(
 			friendIds,
 			NotificationType.SubscriptionUpdatePresence,
-			presenceUpdateMessage(playerId, presence?.roomInstance ?? null, presence?.appVersion)
+			presenceUpdateMessage(
+				playerId,
+				presence?.roomInstance ?? null,
+				presence?.appVersion,
+				presence?.statusVisibility
+			)
 		)
 	} catch (err) {
 		logger.error('failed to push SubscriptionUpdatePresence to friends', {

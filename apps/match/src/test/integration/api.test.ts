@@ -1273,6 +1273,11 @@ describe('public endpoints', () => {
 			notificationType: 'PresenceUpdate',
 			data: { playerId: 9200, statusVisibility: 2 },
 		})
+		expect(sent[9]).toMatchObject({
+			playerIds: [9201],
+			notificationType: 'PresenceUpdate',
+			data: { playerId: 9200, statusVisibility: 2 },
+		})
 	})
 	test('PUT /player/statusvisibility returns 200', async () => {
 		const res = await exports.default.fetch(`${ORIGIN}/player/statusvisibility`, { method: 'PUT' })
