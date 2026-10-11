@@ -22,6 +22,117 @@ async function auth(sub = '205') {
 	}
 }
 
+it('regular players can submit game logs, user details and raw attachments through both URL prefixes', async () => {
+	const id = crypto.randomUUID()
+	const url = `${ORIGIN}/reports/${id}`
+	const headers = await auth('207')
+	const client = {
+		TriggerType: 0,
+		Category: 0,
+		TriggerId: crypto.randomUUID(),
+		TriggeredAt: new Date().toISOString(),
+	}
+	expect(
+		(
+			await SELF.fetch(url, {
+				method: 'PUT',
+				headers: { ...headers, 'content-type': 'application/json' },
+				body: JSON.stringify({ ReportId: id, Client: client }),
+			})
+		).status
+	).toBe(200)
+	const user = { Title: 'Standard report', Description: 'Regular player, no developer role' }
+	const retried = await SELF.fetch(url, {
+		method: 'PUT',
+		headers,
+		body: JSON.stringify({ ReportId: id, Client: client }),
+	})
+	expect(await retried.json()).toEqual({ Success: true, Error: '', ErrorId: null })
+	expect(
+		(await SELF.fetch(`${url}/userinfo`, { method: 'PUT', headers, body: JSON.stringify(user) }))
+			.status
+	).toBe(200)
+	const bytes = new Uint8Array(1024 * 1024).fill(17)
+	expect(
+		(
+			await SELF.fetch(`${ORIGIN}/api/reports/${id}/attachments/client.log.gz`, {
+				method: 'PUT',
+				headers: { ...headers, 'content-type': 'application/gzip' },
+				body: bytes,
+			})
+		).status
+	).toBe(200)
+	expect(
+		(await SELF.fetch(`${ORIGIN}/Reports/${id}/Complete`, { method: 'PUT', headers })).status
+	).toBe(200)
+	const saved = await (
+		await SELF.fetch(url, { headers })
+	).json<{
+		Client: unknown
+		User: unknown
+		CompletedAt: string
+		Files: Array<{ filename: string; size: number }>
+	}>()
+	expect(saved.Client).toEqual(client)
+	expect(saved.User).toEqual(user)
+	expect(saved.CompletedAt).toBeTruthy()
+	expect(saved.Files).toEqual([
+		{ filename: 'client.log.gz', content_type: 'application/gzip', size: bytes.length },
+	])
+	const objects = await env.ATTACHMENTS.list({ prefix: `game-reports/${id}/` })
+	expect(objects.objects).toHaveLength(1)
+	expect(
+		new Uint8Array(await (await env.ATTACHMENTS.get(objects.objects[0].key))!.arrayBuffer())
+	).toEqual(bytes)
+	for (const [method, suffix, body] of [
+		['GET', '', undefined],
+		['PUT', '', JSON.stringify({ ReportId: id, Client: client })],
+		['PUT', '/userinfo', JSON.stringify(user)],
+		['PUT', '/attachments/stolen.log', 'stolen'],
+		['PUT', '/Complete', undefined],
+	] as const)
+		expect(
+			(await SELF.fetch(`${url}${suffix}`, { method, headers: await auth('208'), body })).status
+		).toBe(404)
+	expect((await SELF.fetch(url, { method: 'PUT' })).status).toBe(401)
+})
+
+it('game log retries are idempotent and invalid reports do not create data', async () => {
+	const id = crypto.randomUUID()
+	const url = `${ORIGIN}/reports/${id}`
+	const headers = await auth('209')
+	expect(
+		(await SELF.fetch(`${ORIGIN}/Reports/${id}/Complete`, { method: 'PUT', headers })).status
+	).toBe(404)
+	expect((await SELF.fetch(url, { method: 'PUT', headers, body: '{}' })).status).toBe(400)
+	const body = JSON.stringify({ ReportId: id, Client: { Category: 0 } })
+	for (let i = 0; i < 2; i++)
+		expect((await SELF.fetch(url, { method: 'PUT', headers, body })).status).toBe(200)
+	expect(
+		(
+			await SELF.fetch(`${url}/userinfo`, {
+				method: 'PUT',
+				headers,
+				body: JSON.stringify({ Title: 'Optional description', Description: null }),
+			})
+		).status
+	).toBe(200)
+	for (let i = 0; i < 2; i++)
+		expect(
+			(
+				await SELF.fetch(`${url}/attachments/test.log`, {
+					method: 'PUT',
+					headers,
+					body: `attempt ${i}`,
+				})
+			).status
+		).toBe(200)
+	expect((await env.ATTACHMENTS.list({ prefix: `game-reports/${id}/` })).objects).toHaveLength(1)
+	expect(
+		(await SELF.fetch(`${url}/attachments/empty.log`, { method: 'PUT', headers })).status
+	).toBe(400)
+})
+
 it('stores a form report and returns the client ticket DTO', async () => {
 	const fields = {
 		title: 'Loading issue',

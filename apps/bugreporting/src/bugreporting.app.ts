@@ -5,6 +5,8 @@ import { useWorkersLogger } from 'workers-tagged-logger'
 import { withNotFound, withOnError } from '@repo/hono-helpers'
 import { validateAndGetAccountId } from '@repo/jwt'
 
+import gameLogReports from './game-log-reports'
+
 import type { App } from './context'
 
 // Store report metadata in D1 and attachments in R2 with account ownership checks.
@@ -20,6 +22,10 @@ const app = new Hono<App>()
 	.onError(withOnError())
 	.notFound(withNotFound())
 	.get('/', (c) => c.json({ service: c.env.NAME, status: 'ok' }))
+	.route('/reports', gameLogReports)
+	.route('/api/reports', gameLogReports)
+	.route('/Reports', gameLogReports)
+	.route('/api/Reports', gameLogReports)
 	.use('/ado/*', async (c, next) => {
 		const accountId = await validateAndGetAccountId(c.req.raw, await c.env.JWT_SECRET.get())
 		if (accountId === null) return c.json({ error: 'Unauthorized' }, 401)
