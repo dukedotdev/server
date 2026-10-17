@@ -65,6 +65,7 @@ const DEFAULT_CONNECT_PLAYER = 9000
 
 interface HubRecord {
 	type?: number
+	error?: string
 	target?: string
 	invocationId?: string
 	result?: unknown
@@ -197,6 +198,57 @@ describe('internal endpoint auth', () => {
 })
 
 describe('hub protocol', () => {
+	test('Studio named subscriptions merge, deliver only to their owner, and unsubscribe', async () => {
+		const { ws, waitFor } = await connect('conn-studio-channels')
+		const stub = env.RECFLARE_NOTIFICATIONS_HUB.getByName('global')
+		for (const [i, channel] of ['RRS:first', 'RRS:second', 'RRS:first'].entries()) {
+			send(ws, {
+				type: 1,
+				invocationId: `s${i}`,
+				target: 'SubscribeTo',
+				arguments: [{ Channels: [channel] }],
+			})
+			expect(
+				(await waitFor((r) => r.type === 3 && r.invocationId === `s${i}`)).error
+			).toBeUndefined()
+		}
+		expect(
+			await runInDurableObject(stub, (instance) =>
+				instance.notifyChannel(DEFAULT_CONNECT_PLAYER + 1, 'RRS:first', 'rrs.pushtostudio', {})
+			)
+		).toBe(0)
+		expect(
+			await runInDurableObject(stub, (instance) =>
+				instance.notifyChannel(DEFAULT_CONNECT_PLAYER, 'RRS:first', 'rrs.pushtostudio', {
+					RoomId: 123,
+				})
+			)
+		).toBe(1)
+		const notification = await waitFor((r) => r.type === 1 && r.target === 'Notification')
+		expect(JSON.parse(notification.arguments![0] as string)).toEqual({
+			Id: 'rrs.pushtostudio',
+			Msg: { RoomId: 123 },
+		})
+		send(ws, {
+			type: 1,
+			invocationId: 'u',
+			target: 'UnsubscribeFrom',
+			arguments: [{ Channels: ['RRS:first'] }],
+		})
+		await waitFor((r) => r.type === 3 && r.invocationId === 'u')
+		expect(
+			await runInDurableObject(stub, (instance) =>
+				instance.notifyChannel(DEFAULT_CONNECT_PLAYER, 'RRS:first', 'rrs.pushtostudio', {})
+			)
+		).toBe(0)
+		expect(
+			await runInDurableObject(stub, (instance) =>
+				instance.notifyChannel(DEFAULT_CONNECT_PLAYER, 'RRS:second', 'rrs.pushtostudio', {})
+			)
+		).toBe(1)
+		ws.close()
+	})
+
 	test('GetSubscriptions reflects SubscribeToPlayers', async () => {
 		const { ws, waitFor } = await connect('conn-subs')
 

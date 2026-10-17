@@ -49,3 +49,36 @@ the rooms migrations too. Deploying does not apply either.
 just migrate -F studio             # remote
 just migrate -F studio -- --local  # dev db
 ```
+
+## Editor build limits
+
+`GET /cloud-builds/get-rate-limit-config` returns the editor's
+`CloudBuildRateLimitConfigDTO` directly: `buildThrottleIntervalHours` (1),
+`warnAfterBuildsPerInterval` (90), and `maxBuildsPerInterval` (100). These names
+matter: unknown keys leave the DTO's maximum at zero and block even a first build.
+The authenticated `get-build-count-for-user` route provides the user's counts.
+
+## Queued Studio builds
+
+`POST /cloud-builds/create` accepts the SDK's room, subroom, save, auto-publish,
+and optional target fields. It requires Studio authorization and room management
+rights, validates the uploaded source manifest, and returns a numeric string
+build ID with a null completion time. Repeated requests for an in-progress save
+reuse its job. `GET /cloud-builds?cloudBuildId=...` reads the status;
+`PUT /cloud-builds/cancel` cancels a queued or running job.
+
+Apply migration `0003_studio_cloud_build_job.sql`. Configure a private
+`CLOUD_BUILD_KEY` and run the outbound worker from `recflare/cloud-building` with
+the matching credential. Without a key, creation returns an explicit unavailable
+response. `CLOUD_BUILD_TARGETS` defaults to `0,2` (Windows and Android), and
+`CLOUD_BUILD_TEMPLATE_VERSION` defaults to 169. Match installed editor modules to
+the enabled targets.
+
+The private `/internal/cloud-builds/claim`, `/:id/heartbeat`, and `/:id/finish`
+routes lease jobs to that worker. Only validated UnityFS artifacts for the
+allocated asset IDs and requested platforms are accepted. SDK bundle version 5
+is retained. Completion links the submitted save; auto-publish does not replace
+a newer draft. Failed, cancelled, or expired jobs never become successful builds.
+Claims include a signed, short-lived SDK validation token with no account subject
+or roles. Deploy the paired API support: only bulk component-text validation
+accepts this credential. It cannot authenticate as an account or publish a room.
