@@ -6312,13 +6312,17 @@ describe('studio room bundles', () => {
 		expect(
 			(
 				await SELF.fetch(
-					`${ORIGIN}/rooms/9901/subrooms/99011/unityasset?unityAssetId=00000000-0000-4000-8000-000000000000`
+					`${ORIGIN}/rooms/9901/subrooms/99011/unityasset?unityAssetId=00000000-0000-4000-8000-000000000000`,
+					{ headers: await bearer('1') }
 				)
 			).status
 		).toBe(404)
 		expect(
-			(await SELF.fetch(`${ORIGIN}/rooms/9902/subrooms/99021/unityasset?unityAssetId=${ASSET}`))
-				.status
+			(
+				await SELF.fetch(`${ORIGIN}/rooms/9902/subrooms/99021/unityasset?unityAssetId=${ASSET}`, {
+					headers: await bearer('1'),
+				})
+			).status
 		).toBe(404)
 
 		const detail = await SELF.fetch(
@@ -6995,5 +6999,100 @@ describe('Studio room management contracts', () => {
 			SavedOnPlatform: null,
 			SavedOnDeviceClass: null,
 		})
+	})
+})
+
+describe('Studio source revision permissions', () => {
+	it('keeps drafts and historical source behind save-history permissions', async () => {
+		const roomId = 987650
+		await seedRoomWithSubRooms(env.DB, {
+			RoomId: roomId,
+			Name: 'PrivateStudioDraft',
+			CreatorAccountId: 987650,
+			Accessibility: 0,
+			Roles: [{ AccountId: 987651, Role: 30 }],
+			SubRooms: [{ SubRoomId: roomId, Name: 'Home', CurrentSave: null }],
+		})
+		const url = `${ORIGIN}/rooms/${roomId}/subrooms/${roomId}/unityasset`
+		const save = async (id: string, filename: string, autoPublish: boolean) => {
+			const response = await SELF.fetch(`${ORIGIN}/rooms/${roomId}/subrooms/${roomId}/data`, {
+				method: 'POST',
+				headers: { ...(await bearer(String(roomId))), 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					UnityAssetId: id,
+					UnityAsset: { Filename: filename, Hash: 'source-hash' },
+					SubRoomData: { Filename: 'draft.room' },
+					AutoPublish: autoPublish,
+				}),
+			})
+			expect(response.status).toBe(200)
+		}
+		const oldId = '11111111-3333-4444-8555-666666666666'
+		const currentId = '22222222-3333-4444-8555-666666666666'
+		const draftId = '33333333-3333-4444-8555-666666666666'
+		await save(oldId, 'old.json', true)
+		await save(currentId, 'published.json', true)
+		await save(draftId, 'draft.json', false)
+		for (const headers of [{}, await bearer('987652')]) {
+			for (const query of ['', `?unityAssetId=${currentId}`]) {
+				const response = await SELF.fetch(url + query, { headers })
+				expect(response.status).toBe(200)
+				expect(await response.json()).toMatchObject({ filename: 'published.json' })
+			}
+		}
+		for (const id of [draftId, oldId]) {
+			expect((await SELF.fetch(url + `?unityAssetId=${id}`)).status).toBe(401)
+			expect(
+				(await SELF.fetch(url + `?unityAssetId=${id}`, { headers: await bearer('987652') })).status
+			).toBe(403)
+			for (const account of ['987650', '987651']) {
+				const response = await SELF.fetch(url + `?unityAssetId=${id}`, {
+					headers: await bearer(account),
+				})
+				expect(response.status).toBe(200)
+				expect(await response.json()).toMatchObject({
+					filename: id === draftId ? 'draft.json' : 'old.json',
+				})
+			}
+		}
+		for (const account of ['987650', '987651']) {
+			const response = await SELF.fetch(url, { headers: await bearer(account) })
+			expect(await response.json()).toMatchObject({ filename: 'draft.json' })
+		}
+		// A reused asset ID must not make a newer draft public or hide it from its owner.
+		await save(currentId, 'replacement-draft.json', false)
+		const publicSource = await SELF.fetch(url + `?unityAssetId=${currentId}`)
+		expect(await publicSource.json()).toMatchObject({ filename: 'published.json' })
+		const ownerSource = await SELF.fetch(url + `?unityAssetId=${currentId}`, {
+			headers: await bearer('987650'),
+		})
+		expect(await ownerSource.json()).toMatchObject({ filename: 'replacement-draft.json' })
+	})
+	it('does not expose an unpublished first revision through default lookup', async () => {
+		await seedRoomWithSubRooms(env.DB, {
+			RoomId: 987660,
+			Name: 'UnpublishedStudioSource',
+			CreatorAccountId: 987660,
+			Roles: [],
+			SubRooms: [{ SubRoomId: 987660, Name: 'Home', CurrentSave: null }],
+		})
+		const url = `${ORIGIN}/rooms/987660/subrooms/987660`
+		const saved = await SELF.fetch(url + '/data', {
+			method: 'POST',
+			headers: { ...(await bearer('987660')), 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				UnityAssetId: '44444444-3333-4444-8555-666666666666',
+				UnityAsset: { Filename: 'first-draft.json', Hash: null },
+				AutoPublish: false,
+			}),
+		})
+		expect(saved.status).toBe(200)
+		expect((await SELF.fetch(url + '/unityasset')).status).toBe(404)
+		expect(
+			(await SELF.fetch(url + '/unityasset', { headers: await bearer('987661') })).status
+		).toBe(404)
+		const source = await SELF.fetch(url + '/unityasset', { headers: await bearer('987660') })
+		expect(source.status).toBe(200)
+		expect(await source.json()).toMatchObject({ filename: 'first-draft.json' })
 	})
 })

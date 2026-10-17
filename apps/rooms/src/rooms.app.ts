@@ -47,7 +47,6 @@ import {
 	getRoomsByIds,
 	getSimilarRooms,
 	getStudioUnityAsset,
-	getSubRoom,
 	getSubRoomPermissions,
 	getSubRoomSaveById,
 	getSubRoomSaves,
@@ -4098,9 +4097,9 @@ const app = new Hono<App>()
 				'`bakedUnityAssets` (one entry per main bundle), plus `filename` and `hash` for the',
 				'authoring manifest. Source JSON is `GET /roomunityasset/{filename}` on the CDN; baked bundles remain separate.',
 				'',
-				'`target` is 0 for Windows and 2 for Android/Quest. Stripped bundles are stored and',
-				'not listed. An unknown room, subroom, or asset is a 404. No auth: `GET /rooms/{id}`',
-				'already includes the same filenames on `CurrentSave`.',
+				'Stripped bundles are not listed. The published current save is public. Other revisions require the same',
+				'authentication and permissions as save history. Without an asset ID, authorized',
+				'readers receive the latest source; other callers receive only the published source.',
 			].join(' '),
 			parameters: [
 				roomIdParam,
@@ -4109,6 +4108,8 @@ const app = new Hono<App>()
 			],
 			responses: {
 				200: json(UnityAssetWithSourceDto, 'The unity asset and its baked bundles'),
+				401: UNAUTHORIZED_RESPONSE,
+				403: FORBIDDEN_RESPONSE,
 				404: { description: 'No such room, subroom, or asset on that subroom' },
 			},
 		}),
@@ -4117,13 +4118,26 @@ const app = new Hono<App>()
 			const subRoomId = Number.parseInt(c.req.param('subRoomId'), 10)
 			const unityAssetId = c.req.query('unityAssetId') ?? ''
 
-			const sub = await getSubRoom(c.env.DB, roomId, subRoomId)
-			if (!sub) return c.notFound()
-			const saves = await getSubRoomSaves(c.env.DB, subRoomId)
-			const save =
-				unityAssetId === ''
-					? saves.find((row) => studioSource(row) !== null)
-					: saves.find((row) => row.UnityAssetId === unityAssetId)
+			const room = await getRoomById(c.env.DB, roomId)
+			const sub = room && findSubRoom(room, subRoomId)
+			if (!room || !sub) return c.notFound()
+			const current = sub.CurrentSave
+			let save =
+				typeof current === 'object' && current !== null
+					? (current as Record<string, unknown>)
+					: undefined
+			const accountId = await authedAccountId(c)
+			const canReadHistory = accountId !== null && (await canReadSaves(c, room, roomId, accountId))
+			if (canReadHistory) {
+				const saves = await getSubRoomSaves(c.env.DB, subRoomId)
+				save =
+					unityAssetId === ''
+						? saves.find((row) => studioSource(row) !== null)
+						: saves.find((row) => row.UnityAssetId === unityAssetId)
+			} else if (unityAssetId !== '' && save?.UnityAssetId !== unityAssetId) {
+				if (accountId === null) return unauthorized(c)
+				return c.body(null, 403)
+			}
 			if (!save) return c.notFound()
 			const source = studioSource(save)
 			if (!source) return c.notFound()

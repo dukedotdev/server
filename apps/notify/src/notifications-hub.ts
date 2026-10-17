@@ -474,28 +474,6 @@ export class NotificationsHub extends DurableObject<Env> {
 
 	// ---- Server → client RPC (callable from other workers) -------------------
 
-	/** Named Studio channels are additionally scoped to the authenticated recipient. */
-	async notifyChannel(
-		playerId: number,
-		channel: string,
-		id: string,
-		data: unknown
-	): Promise<number> {
-		let delivered = 0
-		for (const ws of this.ctx.getWebSockets()) {
-			const state = ws.deserializeAttachment() as SocketState
-			if (state.playerId !== playerId || !state.handshakeDone || !state.channels?.includes(channel))
-				continue
-			try {
-				ws.send(this.invocation('Notification', [JSON.stringify({ Id: id, Msg: data })]))
-				delivered++
-			} catch {
-				/* A disconnected socket is cleaned up by webSocketClose. */
-			}
-		}
-		return delivered
-	}
-
 	/**
 	 * Send a notification to a player's connections, queueing it if the player
 	 * isn't currently connected (mirrors `SendNotificationToPlayer`).

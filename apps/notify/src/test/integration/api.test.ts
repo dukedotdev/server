@@ -198,7 +198,7 @@ describe('internal endpoint auth', () => {
 })
 
 describe('hub protocol', () => {
-	test('Studio named subscriptions merge, deliver only to their owner, and unsubscribe', async () => {
+	test('Studio named subscriptions merge and unsubscribe', async () => {
 		const { ws, waitFor } = await connect('conn-studio-channels')
 		const stub = env.RECFLARE_NOTIFICATIONS_HUB.getByName('global')
 		for (const [i, channel] of ['RRS:first', 'RRS:second', 'RRS:first'].entries()) {
@@ -212,40 +212,27 @@ describe('hub protocol', () => {
 				(await waitFor((r) => r.type === 3 && r.invocationId === `s${i}`)).error
 			).toBeUndefined()
 		}
-		expect(
-			await runInDurableObject(stub, (instance) =>
-				instance.notifyChannel(DEFAULT_CONNECT_PLAYER + 1, 'RRS:first', 'rrs.pushtostudio', {})
+		const channels = () =>
+			runInDurableObject(
+				stub,
+				(_instance, state) =>
+					state
+						.getWebSockets()
+						.map(
+							(socket) =>
+								socket.deserializeAttachment() as { connectionId: string; channels?: string[] }
+						)
+						.find((attachment) => attachment.connectionId === 'conn-studio-channels')?.channels
 			)
-		).toBe(0)
-		expect(
-			await runInDurableObject(stub, (instance) =>
-				instance.notifyChannel(DEFAULT_CONNECT_PLAYER, 'RRS:first', 'rrs.pushtostudio', {
-					RoomId: 123,
-				})
-			)
-		).toBe(1)
-		const notification = await waitFor((r) => r.type === 1 && r.target === 'Notification')
-		expect(JSON.parse(notification.arguments![0] as string)).toEqual({
-			Id: 'rrs.pushtostudio',
-			Msg: { RoomId: 123 },
-		})
+		expect(await channels()).toEqual(['RRS:first', 'RRS:second'])
 		send(ws, {
 			type: 1,
 			invocationId: 'u',
 			target: 'UnsubscribeFrom',
 			arguments: [{ Channels: ['RRS:first'] }],
 		})
-		await waitFor((r) => r.type === 3 && r.invocationId === 'u')
-		expect(
-			await runInDurableObject(stub, (instance) =>
-				instance.notifyChannel(DEFAULT_CONNECT_PLAYER, 'RRS:first', 'rrs.pushtostudio', {})
-			)
-		).toBe(0)
-		expect(
-			await runInDurableObject(stub, (instance) =>
-				instance.notifyChannel(DEFAULT_CONNECT_PLAYER, 'RRS:second', 'rrs.pushtostudio', {})
-			)
-		).toBe(1)
+		expect((await waitFor((r) => r.type === 3 && r.invocationId === 'u')).error).toBeUndefined()
+		expect(await channels()).toEqual(['RRS:second'])
 		ws.close()
 	})
 
