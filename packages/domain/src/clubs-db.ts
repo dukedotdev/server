@@ -1078,6 +1078,25 @@ export async function getClubsByCreator(db: D1Database, accountId: number): Prom
 }
 
 /**
+ * The PUBLIC clubs an account created, oldest first — what their profile shows. Like
+ * {@link getClubsByCreator} (subscription clubs excluded) but private clubs are left out
+ * too, for everyone: the creator reads their own through `/club/mine/created`.
+ */
+export async function getPublicClubsByCreator(db: D1Database, accountId: number): Promise<Club[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT data FROM club
+			 WHERE creator_account_id = ?1
+			   AND json_extract(data, '$.ClubType') != ?2
+			   AND visibility = ?3
+			 ORDER BY json_extract(data, '$.CreatedAt') ASC`
+		)
+		.bind(accountId, SUBSCRIPTION_CLUB_TYPE, ClubVisibility.Public)
+		.all<ClubRow>()
+	return parseAll(results)
+}
+
+/**
  * All clubs an account is an actual member of (GetMyMembershipClubs), oldest club
  * first. Only memberships at/above `Member` count — pending requests, denied
  * requests, and bans are excluded. Joins `club_member` to `club`, so a membership

@@ -81,6 +81,11 @@ export const ClubDto = z.object({
 	MemberCount: z.int().describe('Derived from the club_member rows at/above Member (10)'),
 })
 
+/** A club on a profile's created list (`/club/account/{id}/created`): the club plus `ClubChatEnabled`. */
+export const ProfileClubDto = ClubDto.extend({
+	ClubChatEnabled: z.boolean().describe('Always true: nothing can turn club chat off yet'),
+})
+
 /**
  * An image record as every image on the site is served (`SavedImage`). A club's gallery
  * serves these whole — see AdditionalImages on the details view.

@@ -22,6 +22,7 @@ import {
 	getHomeClub,
 	getMembership,
 	getOrCreateSubscriptionClub,
+	getPublicClubsByCreator,
 	getPublicClubsByMember,
 	getSubscriptionClub,
 	getSubscriptionMemberships,
@@ -69,6 +70,7 @@ import {
 	MinLevelRequest,
 	ModifyClubRequest,
 	NullEnvelope,
+	ProfileClubDto,
 	SubscriberCountResponse,
 	SubscribeRequest,
 	SubscriptionDetailsResponse,
@@ -767,6 +769,45 @@ const app = new Hono<App>()
 		}),
 		async (c) =>
 			c.json(await getPublicClubsByMember(c.env.DB, Number.parseInt(c.req.param('accountId'), 10)))
+	)
+
+	// The clubs shown on a player's profile as the ones they CREATED: public clubs only,
+	// for everyone (the creator reads their own, private ones included, from
+	// /club/mine/created). Public, and an unknown account has none.
+	//
+	// Each club carries `ClubChatEnabled`, which the profile reads and no other club route
+	// serves. Nothing can turn club chat off yet (see hasDisabledClubChat), so it is true.
+	.get(
+		'/club/account/:accountId{[0-9]+}/created',
+		describeRoute({
+			tags: ['Clubs'],
+			summary: 'The public clubs an account created',
+			description: [
+				'The clubs the account created, oldest first, PUBLIC clubs only (private and',
+				'subscription clubs excluded) — what their profile shows. Public (no auth). An',
+				'unknown account has `[]`. Each club adds `ClubChatEnabled`, always true: nothing',
+				'can turn club chat off yet.',
+			].join(' '),
+			parameters: [
+				{
+					name: 'accountId',
+					in: 'path',
+					required: true,
+					description: 'Account id (digits only)',
+					schema: { type: 'string' },
+				},
+			],
+			responses: {
+				200: json(ProfileClubDto.array(), 'The account’s public created clubs'),
+			},
+		}),
+		async (c) => {
+			const clubs = await getPublicClubsByCreator(
+				c.env.DB,
+				Number.parseInt(c.req.param('accountId'), 10)
+			)
+			return c.json(clubs.map((club) => ({ ...club, ClubChatEnabled: true })))
+		}
 	)
 
 	// Club search / browse. Public, non-subscription clubs; `category` filters to that

@@ -427,6 +427,50 @@ describe('clubs endpoints', () => {
 		expect((await exports.default.fetch(`${ORIGIN}/account/abc/clubs`)).status).toBe(404)
 	})
 
+	test('GET /club/account/:id/created lists only the PUBLIC clubs the account created', async () => {
+		const club = (ClubId: number, Visibility: number, CreatorAccountId: number, ClubType = 0) => ({
+			ClubId,
+			Name: `Club ${ClubId}`,
+			Description: '',
+			Category: 'Social',
+			Visibility,
+			Joinability: 0,
+			AllowJuniors: true,
+			MainImageName: '',
+			ClubType,
+			ClubhouseRoomId: null,
+			CreatorAccountId,
+			IsRRO: false,
+			MinLevel: 0,
+			State: 0,
+			MemberCount: 1,
+			CreatedAt: `2026-07-0${ClubId - 9200}T00:00:00Z`,
+		})
+		// 9201 public, 9202 private, 9203 a public subscription club, 9204 public but made by
+		// someone else, 9205 public.
+		const clubs = [
+			club(9201, 1, 4713),
+			club(9202, 0, 4713),
+			club(9203, 1, 4713, 1),
+			club(9204, 1, 4714),
+			club(9205, 1, 4713),
+		]
+		const insertClub = env.DB.prepare('INSERT INTO club (data) VALUES (?1)')
+		await env.DB.batch(clubs.map((c) => insertClub.bind(JSON.stringify(c))))
+
+		// No auth needed; oldest first, with ClubChatEnabled added and CreatedAt left off.
+		const res = await exports.default.fetch(`${ORIGIN}/club/account/4713/created`)
+		expect(res.status).toBe(200)
+		const listed = (await res.json()) as Array<Record<string, unknown>>
+		expect(listed.map((c) => c.ClubId)).toEqual([9201, 9205])
+		const { CreatedAt: _createdAt, ...stored } = clubs[0]!
+		expect(listed[0]).toEqual({ ...stored, ClubChatEnabled: true })
+
+		// An account that created nothing has no clubs.
+		const none = await exports.default.fetch(`${ORIGIN}/club/account/4799/created`)
+		expect(await none.json()).toEqual([])
+	})
+
 	test('the my-clubs lists exclude subscription clubs (ClubType 1)', async () => {
 		// A subscription club the player both created and is a member of. It's reached
 		// through /subscription/*, so it must not show up among their clubs.
@@ -1762,6 +1806,7 @@ describe('clubs endpoints', () => {
 			'GET /announcements/club/{clubId}',
 			'GET /announcements/v2/mine/unread',
 			'GET /announcements/v2/subscription/mine/unread',
+			'GET /club/account/{accountId}/created',
 			'GET /club/categoryTags',
 			'GET /club/home/me',
 			'GET /club/mine/created',
