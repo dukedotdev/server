@@ -571,10 +571,11 @@ export const imageRoutes = new Hono<App>({ strict: false })
 		}
 	)
 
-	// Global slideshow feed — the most recent public ShareCamera photos (Accessibility 1,
-	// Type 1) across all rooms, newest first, each joined to its creator's username and
-	// room name. Public (no auth): it only surfaces already-public images and backs the
-	// anonymous homepage slideshow. Private photos (Accessibility 0) never appear — the
+	// Global slideshow feed — public ShareCamera photos (Accessibility 1, Type 1) across all
+	// rooms, the most cheered of the last 14 days first (older photos, newest first, top up a
+	// quiet stretch), each joined to its creator's username and room name. Serves the game's
+	// slideshow and the website's homepage alike. Public (no auth): it only surfaces
+	// already-public images. Private photos (Accessibility 0) never appear — the
 	// feed is anonymous, so there is no viewer it could be unlocked for. Returns `{ Images, ValidTill }`,
 	// where ValidTill is a short (2-minute) cache hint the client refreshes against.
 	// Serves 10 by default and never more than SLIDESHOW_MAX_LIMIT (100): it's public and
@@ -587,8 +588,10 @@ export const imageRoutes = new Hono<App>({ strict: false })
 			tags: ['Images'],
 			summary: 'The global slideshow feed',
 			description:
-				'The most recent publicly-listable ShareCamera photos across all rooms, newest ' +
-				'first, each joined to its creator’s username and room name.\n\n' +
+				'Publicly-listable ShareCamera photos across all rooms, the most cheered of those ' +
+				'taken in the last 14 days first (newest breaks ties). When those are fewer ' +
+				'than `take`, older photos follow newest first. Each is joined to its creator’s ' +
+				'username and room name.\n\n' +
 				'Deliberately public — it surfaces only already-public images and backs the ' +
 				'anonymous homepage slideshow. `ValidTill` is a short (2-minute) cache hint the ' +
 				'client refreshes against.',

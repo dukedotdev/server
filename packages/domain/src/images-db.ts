@@ -1,11 +1,11 @@
 /**
  * Image-metadata storage on the shared `recflare` D1 database. Each image is a
  * single JSON blob in the `data` column; queryable fields (Id, ImageName,
- * PlayerId, RoomId) are SQLite generated (virtual) columns extracted from that
+ * PlayerId, RoomId, Type, Accessibility, CreatedAt) are SQLite generated (virtual) columns extracted from that
  * JSON — the same JSON-blob pattern the rooms/accounts tables use.
  *
- * The `img` worker owns the schema/migrations (migrations/0001_image.sql and
- * 0002_image_interaction.sql, applied with its own `migrations_table` so they don't
+ * The `img` worker owns the schema/migrations (migrations/0001_image.sql,
+ * 0002_image_interaction.sql and 0003_image_slideshow_index.sql, applied with its own `migrations_table` so they don't
  * clash with the other workers' migrations on the shared database); the `api` worker
  * handles uploads, cheers and the photo feeds. Other workers (`clubs`, for a club's
  * gallery) only read: they store an image *name* but have to serve the client the
@@ -20,12 +20,18 @@ export const IMAGE_SCHEMA_DDL: string[] = [
 		id INTEGER GENERATED ALWAYS AS (json_extract(data, '$.Id')) VIRTUAL,
 		image_name TEXT GENERATED ALWAYS AS (json_extract(data, '$.ImageName')) VIRTUAL,
 		player_id INTEGER GENERATED ALWAYS AS (json_extract(data, '$.PlayerId')) VIRTUAL,
-		room_id INTEGER GENERATED ALWAYS AS (json_extract(data, '$.RoomId')) VIRTUAL
+		room_id INTEGER GENERATED ALWAYS AS (json_extract(data, '$.RoomId')) VIRTUAL,
+		type INTEGER GENERATED ALWAYS AS (json_extract(data, '$.Type')) VIRTUAL,
+		accessibility INTEGER GENERATED ALWAYS AS (json_extract(data, '$.Accessibility')) VIRTUAL,
+		created_at TEXT GENERATED ALWAYS AS (json_extract(data, '$.CreatedAt')) VIRTUAL
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_image_id ON image (id)`,
 	`CREATE INDEX IF NOT EXISTS idx_image_image_name ON image (image_name)`,
 	`CREATE INDEX IF NOT EXISTS idx_image_player_id ON image (player_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_image_room_id ON image (room_id)`,
+	// The slideshow's window scan (migrations/0003): public photos by recency, so the feed
+	// reads only the recent window's rows rather than json_extracting the whole table.
+	`CREATE INDEX IF NOT EXISTS idx_image_slideshow ON image (type, accessibility, created_at)`,
 	// A player's interaction with a saved image — one row per (player, image). Only
 	// `cheered` for now; named generically so other per-user interactions (e.g.
 	// favorited) can be added as columns. The `api` worker writes it (cheer endpoints)
@@ -517,6 +523,9 @@ export const SLIDESHOW_LIMIT = 10
  */
 export const SLIDESHOW_MAX_LIMIT = 100
 
+/** The slideshow ranks photos taken in this many days by cheers. */
+export const SLIDESHOW_DAYS = 14
+
 /** The slideshow projection of an image — creator username + room name joined in. */
 export interface SlideshowImage {
 	SavedImageId: number
@@ -557,28 +566,49 @@ async function getRoomNames(db: D1Database, ids: number[]): Promise<Map<number, 
 }
 
 /**
- * The global slideshow feed — the most recent PUBLIC ShareCamera photos across all rooms
- * (Accessibility 1, Type 1), newest first, capped at `limit`. Accessibility 0 is a
- * private photo — the same bar every other public image read here applies — and the
- * feed is anonymous, so it must never surface one. Only ShareCamera images are surfaced
- * (not room/profile/invention thumbnails). Each
- * row is joined to its creator's username and (if any) its room's name. Returns the
- * projected SlideshowImage shape. Usernames/room names are resolved in two batched
+ * The global slideshow feed — PUBLIC ShareCamera photos across all rooms (Accessibility 1,
+ * Type 1), the most cheered of those taken in the last {@link SLIDESHOW_DAYS} days first
+ * (newest breaks ties), capped at `limit`. When the window holds fewer than `limit`, older
+ * photos follow newest first, so a quiet stretch still fills the feed instead of serving it
+ * short or empty. Accessibility 0 is a private photo — the same bar every other public
+ * image read here applies — and the feed is anonymous, so it must never surface one. Only
+ * ShareCamera images are surfaced (not room/profile/invention thumbnails). Each row is
+ * joined to its creator's username and (if any) its room's name, resolved in two batched
  * lookups to avoid an N+1 across the (at most `limit`) images.
  */
 export async function getSlideshowImages(
 	db: D1Database,
 	limit = SLIDESHOW_LIMIT
 ): Promise<SlideshowImage[]> {
-	const { results } = await db
+	const since = new Date(Date.now() - SLIDESHOW_DAYS * 24 * 60 * 60 * 1000).toISOString()
+	// Two reads, both on idx_image_slideshow, so D1 bills for the window's photos rather than
+	// the whole table. The ranking needs every photo in the window (any of them could be
+	// the most cheered); the top-up walks the index newest-first and stops at `limit`.
+	const { results: recent } = await db
 		.prepare(
 			`SELECT data FROM image
-			 WHERE json_extract(data, '$.Accessibility') = 1
-			   AND json_extract(data, '$.Type') = ?1
-			 ORDER BY id DESC LIMIT ?2`
+			 WHERE type = ?1 AND accessibility = 1 AND created_at >= ?2
+			 ORDER BY json_extract(data, '$.CheerCount') DESC, created_at DESC
+			 LIMIT ?3`
 		)
-		.bind(SavedImageType.ShareCamera, limit)
+		.bind(SavedImageType.ShareCamera, since, limit)
 		.all<ImageRow>()
+	const results =
+		recent.length >= limit
+			? recent
+			: recent.concat(
+					(
+						await db
+							.prepare(
+								`SELECT data FROM image
+								 WHERE type = ?1 AND accessibility = 1 AND created_at < ?2
+								 ORDER BY created_at DESC
+								 LIMIT ?3`
+							)
+							.bind(SavedImageType.ShareCamera, since, limit - recent.length)
+							.all<ImageRow>()
+					).results
+				)
 	const images = results.map((r) => JSON.parse(r.data) as SavedImage)
 
 	const roomIds = [...new Set(images.map((i) => i.RoomId).filter((v): v is number => v != null))]

@@ -954,6 +954,34 @@ export async function getEventsByCreator(
 }
 
 /**
+ * Every event a player holds an RSVP row for — the `Responses` of their own
+ * `GET /api/playerevents/v1/all`, soonest first, each the stored record beside the RSVP.
+ *
+ * Unlike the profile's {@link getPublicEventsByPlayer}, this is the caller's own view, so
+ * nothing is withheld: every answer (Going, Interested, Can't go) and every open
+ * invitation (`pending`), private events included — they were invited — and finished ones
+ * kept, as `Created` keeps them beside it.
+ */
+export async function getEventResponsesByPlayer(
+	db: D1Database,
+	playerId: number
+): Promise<Array<{ PlayerEvent: PlayerEvent; PlayerEventResponse: PlayerEventResponse }>> {
+	const { results } = await db
+		.prepare(
+			`SELECT e.data AS data, a.rowid AS id, a.event_id, a.player_id, a.status, a.responded_at
+			 FROM event_attendee a
+			 JOIN event e ON e.id = a.event_id
+			 WHERE a.player_id = ?1`
+		)
+		.bind(playerId)
+		.all<EventRow & EventAttendeeRow>()
+	return results
+		.map((r) => ({ event: JSON.parse(r.data) as PlayerEvent, response: toEventResponse(r) }))
+		.sort((a, b) => bySoonest(a.event, b.event))
+		.map(({ event, response }) => ({ PlayerEvent: event, PlayerEventResponse: response }))
+}
+
+/**
  * One entry of a profile's `Responses` — the event beside the player's RSVP to it. The
  * event is the 17-key BASE shape (the client's v1 PlayerEvent), not the stored record.
  */
@@ -1061,15 +1089,47 @@ export async function getEventsByRoom(
 /**
  * The events happening right now — started and not yet finished. Backs the "happening
  * now" browse query. Both bounds compare lexicographically on the generated ISO-8601
- * columns, so the whole filter stays in SQL.
+ * columns, so the whole filter stays in SQL. Public events only, like the browse feed: a
+ * private or unlisted event is for whoever was invited.
  */
 export async function getLiveEvents(db: D1Database, now = Date.now()): Promise<PlayerEvent[]> {
 	const at = eventTime(now)
 	const { results } = await db
-		.prepare('SELECT data FROM event WHERE start_time <= ?1 AND end_time >= ?1')
-		.bind(at)
+		.prepare(
+			`SELECT data FROM event WHERE start_time <= ?1 AND end_time >= ?1
+			   AND json_extract(data, '$.Accessibility') = ?2`
+		)
+		.bind(at, Accessibility.Public)
 		.all<EventRow>()
 	return results.map((r) => JSON.parse(r.data) as PlayerEvent).sort(bySoonest)
+}
+
+/**
+ * The most events any event endpoint serves in one answer — all the client shows. A paged
+ * read caps `take` at this; a bulk read looks up at most this many ids.
+ */
+export const MAX_EVENTS_SERVED = 50
+
+/** A page size from a `take` query: 50 by default, and never more than 50. */
+export function eventTake(raw: string | undefined): number {
+	return Math.min(Number.parseInt(raw ?? '', 10) || MAX_EVENTS_SERVED, MAX_EVENTS_SERVED)
+}
+
+/**
+ * Cap a soonest-first list of current and upcoming events: the first 50, the ones on
+ * soonest.
+ */
+export function soonestEvents<T>(list: T[]): T[] {
+	return list.slice(0, MAX_EVENTS_SERVED)
+}
+
+/**
+ * Cap a soonest-first list that KEEPS finished events (a creator's own list, a club's
+ * shelf): the LAST 50, still soonest first. The first 50 would be the oldest, and a long
+ * history would push every upcoming event off the end.
+ */
+export function latestEvents<T>(list: T[]): T[] {
+	return list.slice(-MAX_EVENTS_SERVED)
 }
 
 /** Soonest start first; ties broken by id so paging is stable. */
@@ -1121,6 +1181,9 @@ export function parseEventSort(raw: string | undefined): EventSort {
  * Events that have already finished are excluded: this backs a browse screen, where a
  * name match on something that ended last month is noise. The per-event history a
  * creator wants comes from `getEventsByCreator`, which keeps them.
+ *
+ * Only `Accessibility` Public events are served, for the same reason: a private or
+ * unlisted event is for whoever was invited, not for anyone browsing.
  */
 export async function searchEvents(
 	db: D1Database,
@@ -1139,17 +1202,19 @@ export async function searchEvents(
 	// lexicographically — that filter stays in SQL, and so does the tag one: an event
 	// has to carry EVERY tag asked for, which is the count of matching tag rows.
 	const wanted = tags.filter(Boolean)
+	const browse = `SELECT data FROM event WHERE end_time >= ?1
+		AND json_extract(data, '$.Accessibility') = ?2`
 	const sql =
 		wanted.length === 0
-			? 'SELECT data FROM event WHERE end_time >= ?1'
-			: `SELECT data FROM event WHERE end_time >= ?1 AND (
+			? browse
+			: `${browse} AND (
 					SELECT COUNT(DISTINCT tag) FROM event_tag
 					WHERE event_tag.event_id = event.id
-					  AND tag IN (${wanted.map((_, i) => `?${i + 2}`).join(', ')})
+					  AND tag IN (${wanted.map((_, i) => `?${i + 3}`).join(', ')})
 				) = ${wanted.length}`
 	const { results } = await db
 		.prepare(sql)
-		.bind(eventTime(Date.now()), ...wanted)
+		.bind(eventTime(Date.now()), Accessibility.Public, ...wanted)
 		.all<EventRow>()
 	let events = results.map((r) => JSON.parse(r.data) as PlayerEvent)
 

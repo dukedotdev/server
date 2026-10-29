@@ -29,9 +29,11 @@ import {
 	where,
 } from './api'
 import { DeviceLinkPage } from './DeviceLink'
+import { eventIdFromPath, EventPage, EventsPage } from './Events'
 import { customAvatarItemIdFromPath, inventionIdFromPath, InventionPage, ItemPage } from './Item'
 import { ModerationPage, PlayerBanStatus } from './Moderation'
 import { PumpleBossFight } from './PumpleBossFight'
+import { RoomsPage } from './Rooms'
 import { StatsPage } from './Stats'
 import { StudioAccessPage } from './StudioAccess'
 
@@ -2462,6 +2464,7 @@ export function App() {
 	const lookupUsername = usernameFromPath(path)
 	const customAvatarItemId = customAvatarItemIdFromPath(path)
 	const imageId = imageIdFromPath(path)
+	const eventId = eventIdFromPath(path)
 	const inventionId = inventionIdFromPath(path)
 
 	useEffect(() => {
@@ -2563,6 +2566,24 @@ export function App() {
 				// load falls through to the SPA shell. The page shows one account's own
 				// status to whoever is signed in, and the whitelist editor only to staff.
 				<StudioAccessPage account={account} navigate={navigate} />
+			) : path === '/events' || path === '/events/' ? (
+				// Public, and a client-side route like /stats: not in `run_worker_first`, so a
+				// cold load falls through to the SPA shell. Waits on the config because its
+				// reads go to `api` and `rooms` through `where()`.
+				<EventsPage ready={config !== undefined} navigate={navigate} />
+			) : path === '/rooms' || path === '/rooms/' ? (
+				// The game's hot rooms list as a grid. Public, and a client-side route like
+				// /events; `/rooms/<id>` (one room's page) is matched further down.
+				<RoomsPage ready={config !== undefined} navigate={navigate} />
+			) : eventId !== null ? (
+				// One event's page, linked from the /events grid. Public events only; a
+				// client-side route like the rest, so a cold load falls through to the SPA shell.
+				<EventPage
+					eventId={eventId}
+					account={account}
+					ready={config !== undefined}
+					navigate={navigate}
+				/>
 			) : path === '/stats' ? (
 				// Unlinked on purpose — nothing in the nav or footer points here; it's for whoever
 				// is handed the URL. Public all the same, and a client-side route like the rest:
@@ -2647,6 +2668,20 @@ function NavBar({
 				<a href={DISCORD_INVITE} target="_blank" rel="noreferrer">
 					Discord
 				</a>
+				<Link
+					to="/rooms"
+					navigate={navigate}
+					className={path === '/rooms' || path === '/rooms/' ? 'active' : ''}
+				>
+					Rooms
+				</Link>
+				<Link
+					to="/events"
+					navigate={navigate}
+					className={path === '/events' || path === '/events/' ? 'active' : ''}
+				>
+					Events
+				</Link>
 				{account === undefined ? null : account ? (
 					<>
 						{/* Staff only, and cosmetic: the link is hidden for everyone else, but
@@ -2702,7 +2737,7 @@ function NavBar({
  */
 const SLIDESHOW_TAKE = 10
 
-/** A recent public image plus who took it and where. */
+/** One of the last two weeks' most-cheered public photos plus who took it and where. */
 interface Slide {
 	url: string
 	username: string
@@ -2710,7 +2745,8 @@ interface Slide {
 }
 
 /**
- * Loads the public photo feed once. `slides === null` means still in flight.
+ * Loads the last two weeks' most-cheered public photos once (topped up with the newest older ones
+ * in a quiet stretch). `slides === null` means still in flight.
  *
  * Waits for the config, since the feed is served by the `api` worker — the same public
  * endpoint the game reads it from — and its hostname arrives with the config. Each entry

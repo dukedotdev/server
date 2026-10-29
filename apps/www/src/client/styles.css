@@ -2213,3 +2213,242 @@ button[type='submit'].danger:not(:disabled):hover {
 .alt-signin > .muted:first-child {
 	margin: 0;
 }
+
+/* ---- Listing grids: /events and /rooms ----------------------------------- */
+
+.shell.listing-page {
+	padding-top: 40px;
+}
+
+.listing-head h1 {
+	margin-bottom: 4px;
+}
+
+.listing-head p {
+	margin-top: 0;
+}
+
+/* Tiles rather than the room list's rows: an event or a hot room is picked by its
+   picture first, and that reads at a glance in a tile. Fills as many columns as fit, one on a phone. */
+.tile-grid {
+	list-style: none;
+	margin: 24px 0 0;
+	padding: 0;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+	gap: 16px;
+}
+
+.tile {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--radius);
+	overflow: hidden;
+}
+
+/* Same fixed 3:2 frame as a room thumbnail, so a row of tiles lines up. The bare div is
+   the stand-in for an event with no picture at all. */
+.tile-thumb {
+	display: block;
+	width: 100%;
+	aspect-ratio: 3 / 2;
+	object-fit: cover;
+	background: var(--surface-hi);
+	border-bottom: 1px solid var(--line);
+}
+
+.tile-body {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	padding: 14px 16px 16px;
+	min-width: 0;
+}
+
+.event-when {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	font-size: 0.8rem;
+	font-weight: 600;
+	color: var(--accent);
+	font-variant-numeric: tabular-nums;
+}
+
+.tile-name {
+	margin: 6px 0 0;
+	font-family: var(--display);
+	font-weight: 700;
+	font-size: 1.05rem;
+	letter-spacing: -0.01em;
+	line-height: 1.3;
+	overflow-wrap: anywhere;
+}
+
+.tile-sub {
+	margin-top: 2px;
+	font-size: 0.875rem;
+	color: var(--muted);
+	text-decoration: none;
+	overflow-wrap: anywhere;
+	align-self: flex-start;
+}
+
+.tile-sub:hover {
+	color: var(--accent);
+}
+
+.tile-desc {
+	margin: 8px 0 0;
+	font-size: 0.875rem;
+	color: var(--muted);
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+}
+
+/* Pinned to the foot of the tile, so the counts line up across a row whatever the
+   descriptions above them run to. */
+.tile-stats {
+	margin: auto 0 0;
+	padding-top: 10px;
+	font-size: 0.8rem;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+/* The tile's picture links to the event too; it brightens on hover, and so does the
+   title, so the two read as one target. */
+.tile-thumb-link {
+	display: block;
+}
+
+.tile-thumb-link .tile-thumb {
+	transition: opacity 0.15s ease;
+}
+
+.tile-thumb-link:hover .tile-thumb {
+	opacity: 0.85;
+}
+
+.tile:has(.tile-thumb-link:hover) .tile-name a {
+	color: var(--accent);
+}
+
+/* The event name on a tile links to the event's page; it reads as a heading until hovered. */
+.tile-name a {
+	color: inherit;
+	text-decoration: none;
+}
+
+.tile-name a:hover {
+	color: var(--accent);
+}
+
+/* ---- One event's page ----------------------------------------------------- */
+
+/* The picture runs edge to edge across the top of the card: an event is sold by it. */
+.event-hero {
+	padding: 0;
+	overflow: hidden;
+}
+
+.event-hero-img {
+	display: block;
+	width: 100%;
+	aspect-ratio: 16 / 7;
+	object-fit: cover;
+	background: var(--surface-hi);
+	border-bottom: 1px solid var(--line);
+}
+
+.event-hero-body {
+	padding: 20px 22px 22px;
+}
+
+.event-hero-name {
+	margin: 6px 0 0;
+	font-family: var(--display);
+	font-size: 1.6rem;
+	line-height: 1.2;
+	letter-spacing: -0.015em;
+	overflow-wrap: anywhere;
+}
+
+.event-hero-meta {
+	margin: 4px 0 0;
+	font-size: 0.9rem;
+}
+
+.event-hero-meta a {
+	color: var(--text);
+	text-decoration: none;
+}
+
+.event-hero-meta a:hover {
+	color: var(--accent);
+}
+
+.event-attending {
+	margin: 14px 0 0;
+	font-variant-numeric: tabular-nums;
+}
+
+.event-attending strong {
+	font-family: var(--display);
+	font-size: 1.15rem;
+}
+
+.event-hero-desc {
+	margin: 12px 0 0;
+	white-space: pre-line;
+	overflow-wrap: anywhere;
+}
+
+/* Going / Interested / Not going: one choice of three, so a joined row with the current
+   answer filled in, rather than three separate buttons. */
+.rsvp {
+	display: inline-flex;
+	flex-wrap: wrap;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	overflow: hidden;
+}
+
+.rsvp button {
+	padding: 10px 18px;
+	border: 0;
+	border-right: 1px solid var(--line);
+	background: transparent;
+	color: var(--text);
+	font: 600 0.95rem var(--body);
+	cursor: pointer;
+}
+
+.rsvp button:last-child {
+	border-right: 0;
+}
+
+.rsvp button:not(:disabled):hover {
+	background: var(--surface-hi);
+}
+
+.rsvp button.active {
+	background: var(--accent);
+	color: var(--accent-text);
+}
+
+.rsvp button:disabled {
+	cursor: default;
+}
+
+.rsvp button:disabled:not(.active) {
+	opacity: 0.6;
+}

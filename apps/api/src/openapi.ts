@@ -1395,10 +1395,12 @@ export const PlayerEventBulkInviteRequest = z.object({
 /** `GET /api/playerevents/v1/all` — the caller's created events and RSVPs. */
 export const PlayerEventsAll = z.object({
 	Created: z.array(PlayerEventDto).describe('Events the caller created, soonest first'),
-	Responses: JsonArray.describe(
-		'Events the caller RSVP’d to — always empty; RSVPs are stored, but this field’s ' +
-			'entry shape has not been observed yet'
-	),
+	Responses: z
+		.array(z.object({ PlayerEvent: PlayerEventDto, PlayerEventResponse: PlayerEventResponseDto }))
+		.describe(
+			'Every event the caller holds an RSVP for — any answer, or an open invitation — ' +
+				'soonest first, each beside the RSVP'
+		),
 })
 
 /**

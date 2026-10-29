@@ -13,9 +13,11 @@ import {
 	deleteEvent,
 	EVENT_DELETED_RESULT,
 	eventInputRejection,
+	eventTake,
 	getEventAttendees,
 	getEventById,
 	getEventResponse,
+	getEventResponsesByPlayer,
 	getEventsByClubs,
 	getEventsByCreator,
 	getEventsByIds,
@@ -26,12 +28,15 @@ import {
 	getPublicEventsByPlayer,
 	inviteToEvent,
 	isEventResponseType,
+	latestEvents,
+	MAX_EVENTS_SERVED,
 	parseEventBody,
 	parseEventSort,
 	parseEventTags,
 	parseEventTime,
 	searchEvents,
 	setEventResponse,
+	soonestEvents,
 	toEventBase,
 	toEventNotification,
 	toEventResponse,
@@ -417,7 +422,7 @@ export const eventRoutes = new Hono<App>({ strict: false })
 		}),
 		async (c) => {
 			const skip = Number.parseInt(c.req.query('skip') ?? '', 10) || 0
-			const take = Number.parseInt(c.req.query('take') ?? '', 10) || 50
+			const take = eventTake(c.req.query('take'))
 			const events = await searchEvents(c.env.DB, '', skip, take)
 			return c.json(events.map(toEventBase))
 		}
@@ -429,24 +434,25 @@ export const eventRoutes = new Hono<App>({ strict: false })
 			tags: ['Events'],
 			summary: 'The caller’s player events',
 			description:
-				'Events the player created and events they have RSVP’d to. `Created` is served ' +
-				'from the event table, soonest first.\n\n' +
-				'`Responses` is still always empty. RSVPs ARE stored now (see ' +
-				'`/api/playerevents/v1/respond` and the `event_attendee` table) — what isn’t known ' +
-				'is the shape this field wants: whether an entry is a bare event like `Created`, ' +
-				'or the event plus the answer, which is the useful thing to render. Serving the ' +
-				'wrong one renders nothing rather than erroring, so it stays empty until a real ' +
-				'response is observed.',
+				'Events the player created and events they have RSVP’d to, each soonest first, ' +
+				'private and finished ones included — this is the caller’s own list.\n\n' +
+				'A `Responses` entry is a PAIR, `{ PlayerEvent, PlayerEventResponse }`: the event ' +
+				'beside the caller’s RSVP to it (any answer, or an open invitation as `Type` 3). ' +
+				'A creator is Going to their own event, so it appears under both keys.',
 			security: AUTHED,
 			responses: {
-				200: json(PlayerEventsAll, 'The caller’s created events, and an empty RSVP list'),
+				200: json(PlayerEventsAll, 'The caller’s created events, and their RSVPs'),
 				401: UNAUTHORIZED_RESPONSE,
 			},
 		}),
 		async (c) => {
 			const id = await authedId(c)
 			if (id === null) return unauthorized(c)
-			return c.json({ Created: await getEventsByCreator(c.env.DB, id), Responses: [] })
+			const [created, responses] = await Promise.all([
+				getEventsByCreator(c.env.DB, id),
+				getEventResponsesByPlayer(c.env.DB, id),
+			])
+			return c.json({ Created: latestEvents(created), Responses: latestEvents(responses) })
 		}
 	)
 
@@ -471,8 +477,16 @@ export const eventRoutes = new Hono<App>({ strict: false })
 			parameters: [idParam('playerId', 'Player id')],
 			responses: { 200: json(PlayerPublicEvents, 'The player’s public events') },
 		}),
-		async (c) =>
-			c.json(await getPublicEventsByPlayer(c.env.DB, Number.parseInt(c.req.param('playerId'), 10)))
+		async (c) => {
+			const events = await getPublicEventsByPlayer(
+				c.env.DB,
+				Number.parseInt(c.req.param('playerId'), 10)
+			)
+			return c.json({
+				Created: soonestEvents(events.Created),
+				Responses: soonestEvents(events.Responses),
+			})
+		}
 	)
 
 	// The tag filter chips on the player-events browse screen. Static: these are the
@@ -539,7 +553,7 @@ export const eventRoutes = new Hono<App>({ strict: false })
 			parameters: [intQuery('id', 'Repeatable club id')],
 			responses: { 200: json(PlayerEventDto.array(), 'The clubs’ events') },
 		}),
-		async (c) => c.json(await getEventsByClubs(c.env.DB, queryIds(c)))
+		async (c) => c.json(latestEvents(await getEventsByClubs(c.env.DB, queryIds(c))))
 	)
 
 	// The same feed for a single club (`/club/1`) — the form the reference serves,
@@ -559,7 +573,7 @@ export const eventRoutes = new Hono<App>({ strict: false })
 		async (c) => {
 			const clubId = Number.parseInt(c.req.param('clubId'), 10)
 			const events = await getEventsByClubs(c.env.DB, [clubId])
-			return c.json({ ContinuationToken: '', Events: events })
+			return c.json({ ContinuationToken: '', Events: latestEvents(events) })
 		}
 	)
 
@@ -594,7 +608,7 @@ export const eventRoutes = new Hono<App>({ strict: false })
 		}),
 		async (c) => {
 			const events = await getEventsByRoom(c.env.DB, Number.parseInt(c.req.param('roomId'), 10))
-			return c.json(events.map(toEventBase))
+			return c.json(soonestEvents(events).map(toEventBase))
 		}
 	)
 
@@ -610,7 +624,7 @@ export const eventRoutes = new Hono<App>({ strict: false })
 				'started and not yet ended, soonest first. A bare array.',
 			responses: { 200: json(PlayerEventDto.array(), 'The events running right now') },
 		}),
-		async (c) => c.json(await getLiveEvents(c.env.DB))
+		async (c) => c.json(soonestEvents(await getLiveEvents(c.env.DB)))
 	)
 
 	// Event search — the browse query. Text is matched term by term against name and
@@ -645,7 +659,7 @@ export const eventRoutes = new Hono<App>({ strict: false })
 		}),
 		async (c) => {
 			const skip = Number.parseInt(c.req.query('skip') ?? '', 10) || 0
-			const take = Number.parseInt(c.req.query('take') ?? '', 10) || 50
+			const take = eventTake(c.req.query('take'))
 			return c.json(
 				await searchEvents(
 					c.env.DB,
@@ -682,14 +696,17 @@ export const eventRoutes = new Hono<App>({ strict: false })
 				'the room shelf serve, this one filtered to the requested ids.\n\n' +
 				'Answers in the order the ids were asked for and skips ids with no event rather ' +
 				'than leaving a hole, so the result may be shorter than the request. No ids at all ' +
-				'is an empty array, not a 400.',
+				'is an empty array, not a 400. Only the first 50 ids are read.',
 			requestBody: form(BulkIdsRequest, 'The event ids to look up'),
 			responses: {
 				200: json(PlayerEventBaseDto.array(), 'The events that exist, in request order'),
 			},
 		}),
 		async (c) => {
-			const events = await getEventsByIds(c.env.DB, await parseFormIds(c))
+			const events = await getEventsByIds(
+				c.env.DB,
+				(await parseFormIds(c)).slice(0, MAX_EVENTS_SERVED)
+			)
 			return c.json(events.map(toEventBase))
 		}
 	)
@@ -711,7 +728,7 @@ export const eventRoutes = new Hono<App>({ strict: false })
 			},
 		}),
 		async (c) => {
-			const events = await getEventsByIds(c.env.DB, queryIds(c))
+			const events = await getEventsByIds(c.env.DB, queryIds(c).slice(0, MAX_EVENTS_SERVED))
 			return c.json(events.map(toEventBase))
 		}
 	)

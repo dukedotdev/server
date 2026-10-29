@@ -7292,6 +7292,37 @@ describe('images', () => {
 		expect(await feed('?take=lots')).toBe(10)
 	})
 
+	// The last 14 days' most-cheered photos lead; older ones (newest first) follow so a
+	// quiet stretch still fills the stage — for the game's slideshow and the website's hero
+	// alike.
+	test('GET /api/images/v1/slideshow ranks 14 days by cheers, then tops up', async () => {
+		// Other tests' photos share this table; start from an empty one so the order is ours.
+		await env.DB.prepare('DELETE FROM image').run()
+		const day = 24 * 60 * 60 * 1000
+		const seed = async (imageName: string, ageDays: number, cheers: number) => {
+			const img = await createImage(env.DB, { imageName, playerId: 42 })
+			await env.DB.prepare(
+				"UPDATE image SET data = json_set(data, '$.CreatedAt', ?2, '$.CheerCount', ?3) WHERE id = ?1"
+			)
+				.bind(img.Id, new Date(Date.now() - ageDays * day).toISOString(), cheers)
+				.run()
+			return img.Id
+		}
+		const oldest = await seed('cheeroldest.jpg', 40, 5)
+		const old = await seed('cheerold.jpg', 30, 99) // outside the window, however cheered
+		const mid = await seed('cheermid.jpg', 10, 3) // past a week, inside 14 days
+		const low = await seed('cheerlow.jpg', 2, 1)
+		const top = await seed('cheertop.jpg', 5, 8)
+		const none = await seed('cheernone.jpg', 1, 0)
+
+		const res = await exports.default.fetch(`${ORIGIN}/api/images/v1/slideshow`)
+		expect(res.status).toBe(200)
+		const ids = ((await res.json()) as { Images: Array<{ SavedImageId: number }> }).Images.map(
+			(i) => i.SavedImageId
+		)
+		expect(ids).toEqual([top, mid, low, none, old, oldest])
+	})
+
 	test('GET /api/images/v5/bulk resolves image records by id, in request order', async () => {
 		const one = await createImage(env.DB, { imageName: 'bulkone.jpg', playerId: 7101 })
 		const two = await createImage(env.DB, { imageName: 'bulktwo.jpg', playerId: 7102 })
@@ -9674,6 +9705,72 @@ describe('player events', () => {
 		expect(ids).not.toContain(pastEvent.PlayerEventId)
 	})
 
+	test('event lists serve at most 50 events', async () => {
+		// 55 events for one creator, the first five already finished.
+		const made: PlayerEventEnvelope[] = []
+		for (let i = 0; i < 55; i++) {
+			made.push(
+				await create(
+					{
+						RoomId: 50,
+						Name: `Capped ${i}`,
+						StartTime: at((i - 5) * HOUR),
+						EndTime: at((i - 5) * HOUR + HOUR / 2),
+					},
+					'88'
+				)
+			)
+		}
+		const ids = (body: unknown) => (body as PlayerEvent[]).map((e) => e.PlayerEventId)
+
+		for (const path of [
+			'/api/playerevents/v1?take=500',
+			'/api/playerevents/v1/search?query=capped&take=500',
+			'/api/playerevents/v1/room/50',
+			`/api/playerevents/v1/bulk?${made.map((e) => `id=${e.PlayerEventId}`).join('&')}`,
+		]) {
+			expect(ids(await (await get(path)).json()), path).toHaveLength(50)
+		}
+
+		// The caller's own list keeps finished events, so it keeps the LATEST 50: the five
+		// oldest (the finished ones) drop off, not the upcoming ones at the end.
+		const mine = (await (await get('/api/playerevents/v1/all', '88')).json()) as {
+			Created: PlayerEvent[]
+		}
+		expect(ids(mine.Created)).toEqual(made.slice(5).map((e) => e.PlayerEventId))
+	})
+
+	test('the browse feed, search and searchlive serve Public events only', async () => {
+		const hidden = await Promise.all(
+			[0, 2, 3, 4].map((accessibility) =>
+				create({
+					RoomId: 3,
+					Name: `Hiddenbrowse ${accessibility}`,
+					StartTime: at(-HOUR),
+					EndTime: at(HOUR),
+					Accessibility: accessibility,
+				})
+			)
+		)
+		const shown = await create({
+			RoomId: 3,
+			Name: 'Hiddenbrowse public',
+			StartTime: at(-HOUR),
+			EndTime: at(HOUR),
+		})
+		const hiddenIds = hidden.map((e) => e.PlayerEventId)
+
+		for (const path of [
+			'/api/playerevents/v1?take=500',
+			'/api/playerevents/v1/search?query=hiddenbrowse&take=500',
+			'/api/playerevents/v1/searchlive',
+		]) {
+			const ids = ((await (await get(path)).json()) as PlayerEvent[]).map((e) => e.PlayerEventId)
+			expect(ids, path).toContain(shown.PlayerEventId)
+			for (const id of hiddenIds) expect(ids, path).not.toContain(id)
+		}
+	})
+
 	test('GET /api/playerevents/v1/room/:roomId serves that room’s current and upcoming events', async () => {
 		// A room of this test's own, so events other tests create can't drift into the shelf.
 		const soon = await create({
@@ -9754,18 +9851,55 @@ describe('player events', () => {
 	test('GET /api/playerevents/v1/all lists the caller’s own events, auth-gated', async () => {
 		expect((await get('/api/playerevents/v1/all')).status).toBe(401)
 
-		const mine = (await (await get('/api/playerevents/v1/all', '42')).json()) as {
+		interface Mine {
 			Created: PlayerEvent[]
-			Responses: unknown[]
+			Responses: Array<{
+				PlayerEvent: PlayerEvent
+				PlayerEventResponse: { PlayerEventId: number; PlayerId: number; Type: number }
+			}>
 		}
+		const mine = (await (await get('/api/playerevents/v1/all', '42')).json()) as Mine
 		const ids = mine.Created.map((e) => e.PlayerEventId)
 		expect(ids).toContain(upcoming.PlayerEventId)
 		// 43 created that one, not 42.
 		expect(ids).not.toContain(liveEvent.PlayerEventId)
 		// Finished events stay in the creator's own list — only the browse queries drop them.
 		expect(ids).toContain(pastEvent.PlayerEventId)
-		// Nothing records an RSVP yet.
-		expect(mine.Responses).toEqual([])
+		// A creator is Going to their own event, so it is under Responses too.
+		expect(
+			mine.Responses.find((r) => r.PlayerEvent.PlayerEventId === upcoming.PlayerEventId)
+				?.PlayerEventResponse.Type
+		).toBe(0)
+
+		// Another player's answers, each a pair of the stored event and the RSVP, soonest first.
+		await post(
+			'/api/playerevents/v1/respond',
+			{ PlayerEventId: upcoming.PlayerEventId, Type: 0 },
+			'77'
+		)
+		await post(
+			'/api/playerevents/v1/respond',
+			{ PlayerEventId: liveEvent.PlayerEventId, Type: 1 },
+			'77'
+		)
+		const answered = (await (await get('/api/playerevents/v1/all', '77')).json()) as Mine
+		expect(answered.Created).toEqual([])
+		expect(
+			answered.Responses.map((r) => [r.PlayerEvent.PlayerEventId, r.PlayerEventResponse.Type])
+		).toEqual([
+			[liveEvent.PlayerEventId, 1],
+			[upcoming.PlayerEventId, 0],
+		])
+		const first = answered.Responses[0]!
+		expect(first.PlayerEvent).toEqual(asRecord(liveEvent, null))
+		expect(Object.keys(first.PlayerEventResponse).sort()).toEqual([
+			'CreatedAt',
+			'PlayerEventId',
+			'PlayerEventResponseId',
+			'PlayerId',
+			'Type',
+		])
+		expect(first.PlayerEventResponse.PlayerId).toBe(77)
 
 		const theirs = (await (await get('/api/playerevents/v1/all', '43')).json()) as {
 			Created: PlayerEvent[]
