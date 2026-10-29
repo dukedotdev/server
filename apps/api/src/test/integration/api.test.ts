@@ -7350,17 +7350,20 @@ describe('images', () => {
 		const pub = await createImage(env.DB, {
 			imageName: 'slidepublic.jpg',
 			playerId: 42,
+			roomId: 2,
 			accessibility: 1,
 		})
 		const priv = await createImage(env.DB, {
 			imageName: 'slideprivate.jpg',
 			playerId: 42,
+			roomId: 2,
 			accessibility: 0,
 		})
 		// A non-photo (room thumbnail) that happens to be public stays out too.
 		const thumb = await createImage(env.DB, {
 			imageName: 'slidethumb.jpg',
 			playerId: 42,
+			roomId: 2,
 			type: 3,
 			accessibility: 1,
 		})
@@ -7375,13 +7378,37 @@ describe('images', () => {
 		expect(ids).not.toContain(thumb.Id)
 	})
 
+	// Every slide is captioned with the room it was taken in, so a photo with no room
+	// tagged (RoomId null, or a stray 0) stays out of the feed.
+	test('GET /api/images/v1/slideshow leaves photos with no room out', async () => {
+		const tagged = await createImage(env.DB, {
+			imageName: 'slideroom.jpg',
+			playerId: 42,
+			roomId: 2,
+		})
+		const untagged = await createImage(env.DB, { imageName: 'slidenoroom.jpg', playerId: 42 })
+		const zero = await createImage(env.DB, { imageName: 'slidezeroroom.jpg', playerId: 42 })
+		await env.DB.prepare("UPDATE image SET data = json_set(data, '$.RoomId', 0) WHERE id = ?1")
+			.bind(zero.Id)
+			.run()
+
+		const res = await exports.default.fetch(`${ORIGIN}/api/images/v1/slideshow?take=100`)
+		expect(res.status).toBe(200)
+		const ids = ((await res.json()) as { Images: Array<{ SavedImageId: number }> }).Images.map(
+			(i) => i.SavedImageId
+		)
+		expect(ids).toContain(tagged.Id)
+		expect(ids).not.toContain(untagged.Id)
+		expect(ids).not.toContain(zero.Id)
+	})
+
 	// The feed is public and unauthenticated, so `take` is clamped rather than trusted:
 	// without the cap a single anonymous request could pull the whole image table through
 	// the two joins behind it.
 	test('GET /api/images/v1/slideshow serves 10 by default and caps take at 100', async () => {
 		// 120 public ShareCamera photos — more than both the default and the cap.
 		for (let i = 0; i < 120; i++) {
-			await createImage(env.DB, { imageName: `bulkslide${i}.jpg`, playerId: 42 })
+			await createImage(env.DB, { imageName: `bulkslide${i}.jpg`, playerId: 42, roomId: 2 })
 		}
 		const feed = async (query: string) => {
 			const res = await exports.default.fetch(`${ORIGIN}/api/images/v1/slideshow${query}`)
@@ -7406,7 +7433,7 @@ describe('images', () => {
 		await env.DB.prepare('DELETE FROM image').run()
 		const day = 24 * 60 * 60 * 1000
 		const seed = async (imageName: string, ageDays: number, cheers: number) => {
-			const img = await createImage(env.DB, { imageName, playerId: 42 })
+			const img = await createImage(env.DB, { imageName, playerId: 42, roomId: 2 })
 			await env.DB.prepare(
 				"UPDATE image SET data = json_set(data, '$.CreatedAt', ?2, '$.CheerCount', ?3) WHERE id = ?1"
 			)
