@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import { COACH_ACCOUNT_ID } from '../../../api/src/custom-avatar-items-load'
 import { call, isAdmin, useAction, usernamesFor, where } from './api'
 
 import type { CustomAvatarItem } from '../../../api/src/custom-avatar-items-db'
@@ -118,8 +119,10 @@ export function ItemPage({
 	const [item, setItem] = useState<CustomAvatarItem | null | undefined>(undefined)
 	const [creator, setCreator] = useState<PublicAccount | null>(null)
 	const [error, setError] = useState('')
+	const [deleted, setDeleted] = useState<string | null>(null)
 
 	useEffect(() => {
+		setDeleted(null)
 		setItem(undefined)
 		setCreator(null)
 		setError('')
@@ -163,6 +166,13 @@ export function ItemPage({
 		)
 	}
 
+	if (deleted !== null) {
+		return (
+			<main className="shell wide">
+				<p className="ok">{deleted} was deleted.</p>
+			</main>
+		)
+	}
 	if (error) {
 		return (
 			<main className="shell wide">
@@ -270,8 +280,31 @@ export function ItemPage({
 					</dd>
 				</dl>
 			</section>
+
+			{/* Staff only, and cosmetic: `api` checks the token's role on the delete itself.
+			    Not offered on a first-party (Coach) item, which `api` refuses to delete. */}
+			{isAdmin() && item.CreatorAccountId !== COACH_ACCOUNT_ID && (
+				<StaffDelete
+					noun="item"
+					name={item.Name}
+					consequence="This deletes the item for everyone, including its creator, and takes it out of the store. Players who bought it lose it. It can't be undone."
+					onDelete={() => deleteCustomAvatarItem(item.CustomAvatarItemId)}
+					onDeleted={() => setDeleted(item.Name)}
+				/>
+			)}
 		</main>
 	)
+}
+
+/**
+ * Delete a custom avatar item through `api`'s `DELETE /api/customAvatarItems/v1/:id` —
+ * creator-only, except that staff may take down anyone's (audit-logged there).
+ */
+async function deleteCustomAvatarItem(itemId: string): Promise<void> {
+	await call(`${where().api}/api/customAvatarItems/v1/${itemId}`, {
+		method: 'DELETE',
+		authed: true,
+	})
 }
 
 /** The `/d/store/invention/<id>` path's numeric invention id, or null for any other path. */

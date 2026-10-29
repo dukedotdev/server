@@ -611,14 +611,25 @@ export async function updateCustomAvatarItem(
 	return row ? toDto(row) : null
 }
 
-/** Deletes one item's row. Returns the deleted item, or null when no row had that id. */
+/**
+ * Deletes one item's row. Returns the deleted item, or null when no row had that id.
+ *
+ * Never deletes a FIRST-PARTY item (filed under the Coach, {@link COACH_ACCOUNT_ID}): that
+ * is stock content imported from the official export, and nothing here can put it back
+ * short of re-running the import. Such an id reads as null, as if there were no row; the
+ * route refuses it with its own message first, so this is the backstop for any caller.
+ */
 export async function deleteCustomAvatarItem(
 	db: D1Database,
 	id: string
 ): Promise<CustomAvatarItem | null> {
 	const row = await db
-		.prepare('DELETE FROM custom_avatar_item WHERE custom_avatar_item_id = ?1 RETURNING data')
-		.bind(id)
+		.prepare(
+			`DELETE FROM custom_avatar_item
+			 WHERE custom_avatar_item_id = ?1 AND creator_account_id != ?2
+			 RETURNING data`
+		)
+		.bind(id, COACH_ACCOUNT_ID)
 		.first<Row>()
 	return row ? toDto(row) : null
 }

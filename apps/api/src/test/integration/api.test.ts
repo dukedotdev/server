@@ -45,6 +45,7 @@ import { banEvasionMatch, resolveBan } from '../../bans-db'
 import {
 	createCustomAvatarItem,
 	SCHEMA_DDL as CUSTOM_AVATAR_ITEM_SCHEMA_DDL,
+	deleteCustomAvatarItem,
 	getCustomAvatarItem,
 	importCustomAvatarItem,
 	MAX_PLAYER_ITEM_PRICE,
@@ -5527,6 +5528,79 @@ describe('custom avatar items', () => {
 		})
 		expect(again.status).toBe(404)
 		expect((await exports.default.fetch(url, { method: 'DELETE' })).status).toBe(401)
+	})
+
+	test('DELETE lets staff take down someone else’s item, audited', async () => {
+		const form = new FormData()
+		form.set(
+			'metadata',
+			JSON.stringify({ Name: 'Staff Takes This', BaseAvatarItemId: 1, BaseAvatarItemColor: '#fff' })
+		)
+		form.set('thumbnailImage', new File([PNG_BYTES], 'file.bin', { type: 'image/png' }))
+		form.set('design', new File([PNG_BYTES], 'file.bin', { type: 'image/png' }))
+		const created = (await (
+			await exports.default.fetch(`${ORIGIN}/api/customAvatarItems/v1`, {
+				method: 'POST',
+				headers: await bearer('205'),
+				body: form,
+			})
+		).json()) as { Value: { CustomAvatarItemId: string; ThumbnailImageFilename: string } }
+		const { CustomAvatarItemId, ThumbnailImageFilename } = created.Value
+		const url = `${ORIGIN}/api/customAvatarItems/v1/${CustomAvatarItemId}`
+
+		const res = await exports.default.fetch(url, {
+			method: 'DELETE',
+			headers: await bearer('9', ['moderator']),
+		})
+		expect(res.status).toBe(200)
+		expect(await res.json()).toMatchObject({ Success: true, Value: { CustomAvatarItemId } })
+		expect(await env.IMAGES.get(ThumbnailImageFilename)).toBeNull()
+
+		const audit = await env.DB.prepare(
+			"SELECT player_id, data FROM audit_log WHERE action = 'delete_custom_avatar_item' ORDER BY audit_log_id DESC"
+		).first<{ player_id: number; data: string }>()
+		expect(audit?.player_id).toBe(9)
+		expect(JSON.parse(audit!.data)).toEqual({
+			customAvatarItemId: CustomAvatarItemId,
+			name: 'Staff Takes This',
+			creatorAccountId: 205,
+		})
+	})
+
+	test('DELETE refuses a first-party (Coach) item to everyone, staff and the Coach included', async () => {
+		const form = new FormData()
+		form.set(
+			'metadata',
+			JSON.stringify({ Name: 'Stock Hat', BaseAvatarItemId: 1, BaseAvatarItemColor: '#fff' })
+		)
+		form.set('thumbnailImage', new File([PNG_BYTES], 'file.bin', { type: 'image/png' }))
+		form.set('design', new File([PNG_BYTES], 'file.bin', { type: 'image/png' }))
+		const created = (await (
+			await exports.default.fetch(`${ORIGIN}/api/customAvatarItems/v1`, {
+				method: 'POST',
+				headers: await bearer('1'),
+				body: form,
+			})
+		).json()) as { Value: { CustomAvatarItemId: string; CreatorAccountId: number } }
+		const { CustomAvatarItemId, CreatorAccountId } = created.Value
+		expect(CreatorAccountId).toBe(1)
+		const url = `${ORIGIN}/api/customAvatarItems/v1/${CustomAvatarItemId}`
+
+		for (const headers of [await bearer('9', ['developer']), await bearer('1')]) {
+			const res = await exports.default.fetch(url, { method: 'DELETE', headers })
+			expect(res.status).toBe(403)
+			expect(await res.json()).toMatchObject({
+				Success: false,
+				Error: 'First-party items cannot be deleted',
+			})
+		}
+		// The query refuses it too, for any caller that skips the route.
+		expect(await deleteCustomAvatarItem(env.DB, CustomAvatarItemId)).toBeNull()
+		expect(
+			await env.DB.prepare('SELECT 1 FROM custom_avatar_item WHERE custom_avatar_item_id = ?1')
+				.bind(CustomAvatarItemId)
+				.first()
+		).not.toBeNull()
 	})
 
 	test('POST 400s without the files', async () => {

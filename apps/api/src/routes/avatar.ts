@@ -17,6 +17,7 @@ import {
 import { SNIFFED_IMAGE_FORMATS, sniffImage } from '@repo/hono-helpers'
 
 import {
+	COACH_ACCOUNT_ID,
 	createCustomAvatarItem,
 	deleteCustomAvatarItem,
 	getCustomAvatarItem,
@@ -796,14 +797,16 @@ export const avatarRoutes = new Hono<App>({ strict: false })
 			summary: 'Delete a custom avatar item',
 			description:
 				'Removes the item and its two bucket objects (thumbnail and design). Only the ' +
-				'creator may delete. Answers the deleted item in the `{ Value, Success, Error, ' +
-				'error_id }` envelope.',
+				'creator may delete — or staff (a `moderator`/`developer` token), whose takedown ' +
+				'is audit-logged. A FIRST-PARTY item (created by the Coach, account 1) can never ' +
+				'be deleted, by anyone: 403. Answers the deleted item in the `{ Value, Success, ' +
+				'Error, error_id }` envelope.',
 			security: AUTHED,
 			parameters: [stringParam('id', 'The `CustomAvatarItemId`')],
 			responses: {
 				200: json(CustomAvatarItemResponse, 'The deleted item'),
 				401: UNAUTHORIZED_RESPONSE,
-				403: json(CustomAvatarItemResponse, 'Not the creator'),
+				403: json(CustomAvatarItemResponse, 'Not the creator, or a first-party item'),
 				404: json(CustomAvatarItemResponse, 'No such item'),
 			},
 		}),
@@ -816,10 +819,28 @@ export const avatarRoutes = new Hono<App>({ strict: false })
 			const itemId = c.req.param('id')
 			const existing = await getCustomAvatarItem(c.env.DB, itemId)
 			if (!existing) return fail(404, 'No such item')
-			if (existing.CreatorAccountId !== id) return fail(403, 'Not your item')
+			// First-party items (the Coach's) are stock content and can't be deleted by anyone,
+			// staff included: nothing short of re-running the import would bring one back.
+			if (existing.CreatorAccountId === COACH_ACCOUNT_ID) {
+				return fail(403, 'First-party items cannot be deleted')
+			}
+			// Staff may take down anyone's item; that takedown is audit-logged.
+			const staffTakedown = existing.CreatorAccountId !== id
+			if (staffTakedown && !(await authedStaff(c))) return fail(403, 'Not your item')
 
 			const item = await deleteCustomAvatarItem(c.env.DB, itemId)
 			if (!item) return fail(404, 'No such item')
+			if (staffTakedown) {
+				await writeAuditLog(c.env.DB, {
+					playerId: id,
+					action: 'delete_custom_avatar_item',
+					data: {
+						customAvatarItemId: item.CustomAvatarItemId,
+						name: item.Name,
+						creatorAccountId: item.CreatorAccountId,
+					},
+				})
+			}
 			// The row is gone; the objects follow. A missing key is a no-op for R2. A first-party
 			// item has neither (it is rendered from its saves' assetbundles), so there is nothing
 			// to delete for one.
