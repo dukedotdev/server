@@ -11,7 +11,7 @@ import {
 	withNotFound,
 	withOnError,
 } from '@repo/hono-helpers'
-import { validateAndGetAccountId, validateAndGetRoles } from '@repo/jwt'
+import { isStaff as hasStaffRole, validateAndGetAccountId, validateAndGetRoles } from '@repo/jwt'
 
 import {
 	AUTHED,
@@ -87,13 +87,6 @@ function maxUploadBytes(value: unknown): number {
 	const configured = intVar(value, DEFAULT_MAX_UPLOAD_BYTES)
 	return configured > 0 ? configured : DEFAULT_MAX_UPLOAD_BYTES
 }
-
-/**
- * Operator-granted elevated roles (the auth worker stamps them from an account's
- * isDeveloper/isModerator flags). Same set `rooms` treats as staff. Staff uploads skip
- * the size limit: they load first-party content by hand that can outgrow it.
- */
-const STAFF_ROLES: ReadonlySet<string> = new Set(['developer', 'moderator'])
 
 function extensionForFileType(fileType: string): string {
 	return UPLOAD_EXTENSION[Number.parseInt(fileType, 10)] ?? ''
@@ -342,7 +335,9 @@ const app = new Hono<App>()
 			if (id === null) return c.body(null, 401)
 
 			const roles = await validateAndGetRoles(c.req.raw, secret)
-			const isStaff = roles?.some((role) => STAFF_ROLES.has(role)) ?? false
+			// Staff uploads skip the size limit: they load first-party content by hand that
+			// can outgrow it.
+			const isStaff = hasStaffRole(roles)
 			const limit = maxUploadBytes(c.env.MAX_UPLOAD_BYTES)
 			const parsed = await readUploadForm(c.req.raw, isStaff ? Number.MAX_SAFE_INTEGER : limit)
 			if ('error' in parsed) return c.json({ error: parsed.error }, parsed.status)

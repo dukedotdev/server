@@ -95,7 +95,12 @@ import {
 	withNotFound,
 	withOnError,
 } from '@repo/hono-helpers'
-import { validateAndGetAccountId, validateAndGetBuild, validateAndGetRoles } from '@repo/jwt'
+import {
+	isStaff as hasStaffRole,
+	validateAndGetAccountId,
+	validateAndGetBuild,
+	validateAndGetRoles,
+} from '@repo/jwt'
 
 // The notification-type ids the hub carries (owned by the `notify` worker). Imported
 // as a value — the enum has no runtime dependencies.
@@ -505,19 +510,12 @@ async function authedGameVersion(c: Context<App>): Promise<string | null> {
 const FEATURED_ROOMS_VERSIONS: ReadonlySet<string> = new Set(['20250718'])
 
 /**
- * Operator-granted elevated roles — the ones the auth worker stamps from an account's
- * isDeveloper/isModerator flags (see the admin CLI). Same set the `notify` / `www`
- * workers gate their admin surfaces on.
- */
-const STAFF_ROLES: ReadonlySet<string> = new Set(['developer', 'moderator'])
-
-/**
  * Whether the caller's token carries a staff role. Used alongside the per-room owner
  * check for actions staff may take in a room they don't own.
  */
 async function isStaff(c: Context<App>): Promise<boolean> {
 	const roles = await validateAndGetRoles(c.req.raw, await c.env.JWT_SECRET.get())
-	return roles?.some((role) => STAFF_ROLES.has(role)) ?? false
+	return hasStaffRole(roles)
 }
 
 /**

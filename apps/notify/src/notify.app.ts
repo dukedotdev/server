@@ -3,7 +3,7 @@ import { useWorkersLogger } from 'workers-tagged-logger'
 
 import { createNotification, writeAuditLog } from '@repo/domain'
 import { logger, withDefaultCors, withNotFound, withOnError } from '@repo/hono-helpers'
-import { validateAndGetAccountId, validateAndGetRoles } from '@repo/jwt'
+import { isStaff, validateAndGetAccountId, validateAndGetRoles } from '@repo/jwt'
 
 import {
 	COACH_MESSAGE_TYPE,
@@ -91,15 +91,6 @@ function isNotificationType(value: unknown): value is string | number {
 }
 
 /**
- * Roles allowed to call the internal send/broadcast endpoints. These are the
- * operator-granted elevated roles (see the auth worker's `role` claim, set from an
- * account's isDeveloper/isModerator flags via the admin CLI) — so a staffer grants
- * themselves the role and can then push notifications through the shared hub, e.g.
- * from the accounts web UI's maintenance control.
- */
-const ADMIN_ROLES = new Set(['developer', 'moderator'])
-
-/**
  * The player opening a hub WebSocket, or null when the connect carries no valid token.
  *
  * A WebSocket connect can't always carry an `Authorization` header — SignalR clients
@@ -178,7 +169,7 @@ async function recordInternalCall(c: Context<App>, playerId: number, status: num
 
 /**
  * Gates the `/internal/*` endpoints on a valid Bearer token that carries one of the
- * {@link ADMIN_ROLES} in its `role` claim. 401 for a missing/invalid token, 403 for a
+ * a staff role (`STAFF_ROLES` in `@repo/jwt`) in its `role` claim. 401 for a missing/invalid token, 403 for a
  * valid token that lacks an admin role.
  *
  * Also where every call through here is AUDITED (see {@link recordInternalCall}). It sits in
@@ -197,7 +188,7 @@ const requireAdmin: MiddlewareHandler<App> = async (c, next) => {
 	const accountId = await validateAndGetAccountId(c.req.raw, secret)
 	if (accountId === null) return c.json({ error: 'Unauthorized' }, 401)
 
-	if (!roles.some((role) => ADMIN_ROLES.has(role))) {
+	if (!isStaff(roles)) {
 		// Recorded like any other call: a signed-in account reaching for an admin endpoint is
 		// exactly what an audit trail is kept for, and unlike the 401 above we know who it was.
 		await recordInternalCall(c, accountId, 403)

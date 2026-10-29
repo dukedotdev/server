@@ -12,6 +12,7 @@ import {
 	inventionTagRejection,
 	MAX_BULK_OUTFIT_ACCOUNTS,
 	setOutfit,
+	writeAuditLog,
 } from '@repo/domain'
 import { SNIFFED_IMAGE_FORMATS, sniffImage } from '@repo/hono-helpers'
 
@@ -30,7 +31,7 @@ import {
 	toQuestCustomAvatarItem,
 	updateCustomAvatarItem,
 } from '../custom-avatar-items-db'
-import { authedId, authedPlus, unauthorized } from '../http'
+import { authedId, authedPlus, authedStaff, unauthorized } from '../http'
 import {
 	createInvention,
 	deleteInvention,
@@ -68,7 +69,6 @@ import {
 	BareBoolean,
 	BareInteger,
 	BulkCustomAvatarItemsRequest,
-	InventionBatchRequest,
 	CreateCustomAvatarItemRequest,
 	CustomAvatarItemList,
 	CustomAvatarItemReportRequest,
@@ -81,6 +81,7 @@ import {
 	GenerateGiftRequest,
 	idParam,
 	intQuery,
+	InventionBatchRequest,
 	InventionCheerRequest,
 	InventionDeleteResult,
 	InventionDetails,
@@ -240,8 +241,13 @@ async function bulkUnityAssetTarget(c: Context<App>): Promise<string | undefined
  */
 async function creatorsInventionResult(
 	c: Context<App>,
-	inventionId: number
-): Promise<{ invention: SavedInvention } | { rejection: string; status: 400 | 401 | 403 | 404 }> {
+	inventionId: number,
+	/** Let staff (a `moderator`/`developer` token) through on someone else's invention. */
+	allowStaff = false
+): Promise<
+	| { invention: SavedInvention; playerId: number; byStaff: boolean }
+	| { rejection: string; status: 400 | 401 | 403 | 404 }
+> {
 	const playerId = await authedId(c)
 	if (playerId === null) return { rejection: 'Unauthorized', status: 401 }
 	if (Number.isNaN(inventionId)) return { rejection: 'inventionId is required', status: 400 }
@@ -249,9 +255,10 @@ async function creatorsInventionResult(
 	const invention = await getInventionById(c.env.DB, inventionId)
 	if (invention === null) return { rejection: 'No such invention', status: 404 }
 	if (invention.CreatorPlayerId !== playerId) {
+		if (allowStaff && (await authedStaff(c))) return { invention, playerId, byStaff: true }
 		return { rejection: 'Not your invention', status: 403 }
 	}
-	return { invention }
+	return { invention, playerId, byStaff: false }
 }
 
 /**
@@ -2633,7 +2640,8 @@ export const avatarRoutes = new Hono<App>({ strict: false })
 			tags: ['Inventions'],
 			summary: 'Delete an invention',
 			description:
-				'Creator only — a buyer or a co-owner cannot delete someone else’s invention. ' +
+				'Creator only — a buyer or a co-owner cannot delete someone else’s invention — ' +
+				'except staff (a `moderator`/`developer` token), whose takedown is audit-logged. ' +
 				'The record goes entirely: its versions, tags and referenced-invention lists live ' +
 				'in the same row.\n\n' +
 				'What survives is deliberate. The data blob stays in storage, because nothing ' +
@@ -2657,10 +2665,12 @@ export const avatarRoutes = new Hono<App>({ strict: false })
 			const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null
 			if (body === null) return c.json(inventionDeleteResult('Invalid request body'))
 
-			// The id rides in the body, as it does on `v2/metadata` and `v4/publish`.
+			// The id rides in the body, as it does on `v2/metadata` and `v4/publish`. Staff
+			// may take down anyone's invention (the website's moderation button).
 			const gate = await creatorsInventionResult(
 				c,
-				typeof body.InventionId === 'number' ? body.InventionId : Number.NaN
+				typeof body.InventionId === 'number' ? body.InventionId : Number.NaN,
+				true
 			)
 			// As on those two: only a missing token is a transport failure. An unknown
 			// invention or someone else's is a domain answer the client reads out of the
@@ -2674,6 +2684,17 @@ export const avatarRoutes = new Hono<App>({ strict: false })
 			// The gate already loaded the row, so a null here is a race — someone deleted it
 			// between the two reads — and lands where the client would put it anyway: gone.
 			const deleted = await deleteInvention(c.env.DB, gate.invention.InventionId)
+			if (deleted !== null && gate.byStaff) {
+				await writeAuditLog(c.env.DB, {
+					playerId: gate.playerId,
+					action: 'delete_invention',
+					data: {
+						inventionId: gate.invention.InventionId,
+						name: gate.invention.Name,
+						creatorPlayerId: gate.invention.CreatorPlayerId,
+					},
+				})
+			}
 			return c.json(
 				deleted === null ? inventionDeleteResult('No such invention') : inventionDeleteResult()
 			)

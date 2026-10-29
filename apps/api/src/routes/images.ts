@@ -22,10 +22,11 @@ import {
 	SLIDESHOW_MAX_LIMIT,
 	toImagesBulk,
 	toImagesPlayer,
+	writeAuditLog,
 } from '@repo/domain'
 import { SNIFFED_IMAGE_FORMATS, sniffImage } from '@repo/hono-helpers'
 
-import { authedId, unauthorized } from '../http'
+import { authedId, authedStaff, unauthorized } from '../http'
 import {
 	AUTHED,
 	CheeredBulkRequest,
@@ -325,7 +326,8 @@ export const imageRoutes = new Hono<App>({ strict: false })
 			tags: ['Images'],
 			summary: 'Delete one of the caller’s photos',
 			description:
-				'Looks the image up by name and refuses unless the caller took it, then removes ' +
+				'Looks the image up by name and refuses unless the caller took it or is staff (a ' +
+				'`moderator`/`developer` token, whose takedown is audit-logged), then removes ' +
 				'the metadata row (and its cheers) and the object from the bucket. The metadata ' +
 				'goes first; the R2 delete is idempotent, so a missing object is fine.',
 			security: AUTHED,
@@ -348,12 +350,23 @@ export const imageRoutes = new Hono<App>({ strict: false })
 
 			const image = await getImageByName(c.env.DB, imageName)
 			if (!image) return c.notFound()
-			if (image.PlayerId !== id) return c.json({ error: 'Not your image' }, 403)
+			// Staff may take down anyone's photo; that takedown is audit-logged.
+			const staffTakedown = image.PlayerId !== id
+			if (staffTakedown && !(await authedStaff(c))) {
+				return c.json({ error: 'Not your image' }, 403)
+			}
 
 			// Drop the metadata (and cheers) first, then the object. An R2 delete is
 			// idempotent, so a missing object is fine.
 			await deleteImage(c.env.DB, image)
 			await c.env.IMAGES.delete(imageName)
+			if (staffTakedown) {
+				await writeAuditLog(c.env.DB, {
+					playerId: id,
+					action: 'delete_image',
+					data: { imageId: image.Id, imageName, playerId: image.PlayerId },
+				})
+			}
 
 			return c.json({ success: true })
 		}
@@ -700,8 +713,8 @@ export const imageRoutes = new Hono<App>({ strict: false })
 			description:
 				'The stored `SavedImage` record for an image id — the raw record, as `v6?name=` ' +
 				'serves, with `Description`, `RoomId` and `PlayerEventId` null where the row holds ' +
-				'null. A private image is served only to the player who took it; to anyone else ' +
-				'it is a 404, like an unknown id.',
+				'null. A private image is served only to the player who took it, and to staff (a ' +
+				'`moderator`/`developer` token); to anyone else it is a 404, like an unknown id.',
 			parameters: [idParam('id', 'Image id')],
 			responses: {
 				200: json(SavedImageDto, 'The image record'),
@@ -711,7 +724,14 @@ export const imageRoutes = new Hono<App>({ strict: false })
 		async (c) => {
 			const image = await getImageById(c.env.DB, Number.parseInt(c.req.param('id'), 10))
 			if (image === null) return c.notFound()
-			if (image.Accessibility !== 1 && image.PlayerId !== (await authedId(c))) return c.notFound()
+			// Staff see a private image too: the moderation panel opens a reported photo here.
+			if (
+				image.Accessibility !== 1 &&
+				image.PlayerId !== (await authedId(c)) &&
+				!(await authedStaff(c))
+			) {
+				return c.notFound()
+			}
 			return c.json(image)
 		}
 	)

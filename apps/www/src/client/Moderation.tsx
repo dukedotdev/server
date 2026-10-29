@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { KickReportCategory } from '../../../notify/src/notification-payloads'
-import { accountIdForUsername, call, isAdmin, useAction, usernamesFor, where } from './api'
+import { accountIdForUsername, call, isAdmin, useAction, usernamesFor } from './api'
 
 import type { PublicAccount } from './api'
 
@@ -247,6 +247,43 @@ function reportKind(report: ReportRow): string {
 	if (report.chat_message_id !== null) return 'Chat message'
 	if (report.image_id != null) return 'Photo'
 	return 'Player'
+}
+
+/**
+ * Where to see the thing a report is against, or null when there's nothing to open (a
+ * player or chat report, or a photo that's gone). Inventions and avatar items open their
+ * public store pages, which show only PUBLISHED ones — an unpublished invention reads as
+ * "no invention here", and the id in the title is still there to look it up by.
+ */
+function reportTarget(report: ReportRow): { href: string; title: string } | null {
+	if (report.image_name && report.image_id != null) {
+		// The photo's own page rather than the bare file, so staff can delete it from there.
+		return { href: `/image/${report.image_id}`, title: `Photo #${report.image_id}` }
+	}
+	if (report.invention_id !== null) {
+		return {
+			href: `/d/store/invention/${report.invention_id}`,
+			title: `Invention #${report.invention_id}`,
+		}
+	}
+	if (report.custom_avatar_item_id !== null) {
+		return {
+			href: `/d/store/customavataritem/${report.custom_avatar_item_id}`,
+			title: `Avatar item ${report.custom_avatar_item_id}`,
+		}
+	}
+	return null
+}
+
+/** A report's kind, linked to the reported thing when there's one to open. */
+function ReportKind({ report }: { report: ReportRow }) {
+	const target = reportTarget(report)
+	if (!target) return <>{reportKind(report)}</>
+	return (
+		<a href={target.href} target="_blank" rel="noreferrer" title={target.title}>
+			{reportKind(report)}
+		</a>
+	)
 }
 
 /**
@@ -1036,18 +1073,7 @@ function ReportTable({
 								<PlayerName id={report.reporter_player_id} names={names} />
 							</td>
 							<td>
-								{report.image_name ? (
-									<a
-										href={`${where().img}/${report.image_name}`}
-										target="_blank"
-										rel="noreferrer"
-										title={`Photo #${report.image_id}`}
-									>
-										{reportKind(report)}
-									</a>
-								) : (
-									reportKind(report)
-								)}
+								<ReportKind report={report} />
 							</td>
 							<td>{categoryLabel(report.report_category)}</td>
 							{/* The reporter's own words, untruncated in the title so a long

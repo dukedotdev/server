@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
 import {
 	addXp,
 	applyLevelUps,
+	AUDIT_LOG_SCHEMA_DDL,
 	createImage,
 	GAME_VERSION,
 	getImageByName,
@@ -163,6 +164,7 @@ beforeAll(async () => {
 
 	// Images table (owned by the img worker) — uploadsaved records a row here.
 	for (const stmt of IMAGE_SCHEMA_DDL) await env.DB.prepare(stmt).run()
+	for (const stmt of AUDIT_LOG_SCHEMA_DDL) await env.DB.prepare(stmt).run()
 
 	// Relationships table (owned by the api worker) — friendship endpoints use it.
 	for (const stmt of RELATIONSHIP_SCHEMA_DDL) await env.DB.prepare(stmt).run()
@@ -3319,6 +3321,36 @@ describe('public endpoints', () => {
 			`${ORIGIN}/api/inventions/v1?inventionId=${inventionId}`
 		)
 		expect(one.status).toBe(200)
+	})
+
+	test('POST /api/inventions/v2/delete lets staff take down anyone’s invention, audited', async () => {
+		const save = await exports.default.fetch(`${ORIGIN}/api/inventions/v9/save`, {
+			method: 'POST',
+			headers: { ...(await bearer('5191')), 'Content-Type': 'application/json' },
+			body: JSON.stringify({ name: 'Staff Bins This', inventionDataFilename: 'staff-bin.inv' }),
+		})
+		const inventionId = ((await save.json()) as InventionSaveV9Result).Value?.Invention.InventionId
+
+		const res = await exports.default.fetch(`${ORIGIN}/api/inventions/v2/delete`, {
+			method: 'POST',
+			headers: { ...(await bearer('5192', ['moderator'])), 'Content-Type': 'application/json' },
+			body: JSON.stringify({ InventionId: inventionId }),
+		})
+		expect(await res.json()).toEqual({ Value: null, Success: true, Error: null, error_id: null })
+		const gone = await exports.default.fetch(
+			`${ORIGIN}/api/inventions/v1?inventionId=${inventionId}`
+		)
+		expect(gone.status).toBe(404)
+
+		const audit = await env.DB.prepare(
+			"SELECT player_id, data FROM audit_log WHERE action = 'delete_invention' ORDER BY audit_log_id DESC"
+		).first<{ player_id: number; data: string }>()
+		expect(audit?.player_id).toBe(5192)
+		expect(JSON.parse(audit!.data)).toEqual({
+			inventionId,
+			name: 'Staff Bins This',
+			creatorPlayerId: 5191,
+		})
 	})
 
 	test('POST /api/inventions/v2/delete leaves a buyer’s ownership row behind', async () => {
@@ -7822,6 +7854,43 @@ describe('images', () => {
 			'SELECT COUNT(*) AS n FROM image_interaction WHERE saved_image_id = 8100'
 		).first<{ n: number }>()
 		expect(cheers!.n).toBe(0)
+	})
+
+	test('staff may read and delete someone else’s private photo, and the takedown is audited', async () => {
+		const img = await createImage(env.DB, { imageName: 'staff-takedown.jpg', playerId: 7303 })
+		await env.IMAGES.put('staff-takedown.jpg', new Uint8Array([1, 2, 3]))
+		await env.DB.prepare(
+			"UPDATE image SET data = json_set(data, '$.Accessibility', 0) WHERE id = ?1"
+		)
+			.bind(img.Id)
+			.run()
+
+		// A private photo: a 404 to another player, served to staff.
+		const read = async (headers: Record<string, string>) =>
+			exports.default.fetch(`${ORIGIN}/api/images/v6/${img.Id}`, { headers })
+		expect((await read(await bearer('7304'))).status).toBe(404)
+		expect((await read(await bearer('7304', ['moderator']))).status).toBe(200)
+
+		const del = async (headers: Record<string, string>) =>
+			exports.default.fetch(`${ORIGIN}/api/images/v1/deletesaved`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json', ...headers },
+				body: JSON.stringify({ ImageName: 'staff-takedown.jpg' }),
+			})
+		expect((await del(await bearer('7304', ['gameClient']))).status).toBe(403)
+		expect((await del(await bearer('7304', ['developer']))).status).toBe(200)
+		expect(await getImageByName(env.DB, 'staff-takedown.jpg')).toBeNull()
+		expect(await env.IMAGES.get('staff-takedown.jpg')).toBeNull()
+
+		const audit = await env.DB.prepare(
+			"SELECT player_id, data FROM audit_log WHERE action = 'delete_image' ORDER BY audit_log_id DESC"
+		).first<{ player_id: number; data: string }>()
+		expect(audit?.player_id).toBe(7304)
+		expect(JSON.parse(audit!.data)).toEqual({
+			imageId: img.Id,
+			imageName: 'staff-takedown.jpg',
+			playerId: 7303,
+		})
 	})
 
 	/** Seed one image row owned by the default bearer account (42). */

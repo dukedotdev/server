@@ -23,7 +23,7 @@ import { isThreadMember } from '../../../chat/src/thread-db'
 // value — the enum has no runtime dependencies.
 import { KickReportCategory } from '../../../notify/src/notification-payloads'
 import { NotificationType } from '../../../notify/src/notification-types'
-import { authedId, authedRoles, unauthorized } from '../http'
+import { authedId, authedStaff, unauthorized } from '../http'
 import {
 	AUTHED,
 	BareBoolean,
@@ -56,14 +56,6 @@ import { createWarning } from '../warnings-db'
 import type { Context } from 'hono'
 import type { ModerationKickPayload } from '../../../notify/src/notification-payloads'
 import type { App } from '../context'
-
-/**
- * Roles allowed to hand down a warning — the operator-granted elevated roles the auth
- * worker stamps from an account's isModerator/isDeveloper flags (see the admin CLI's
- * `grant-moderator` / `grant-developer`). Same set the `notify` / `www` workers gate
- * their admin surfaces on: a warning is a moderation action, but staff hold both.
- */
-const MODERATOR_ROLES = new Set(['moderator', 'developer'])
 
 /**
  * Read one field of a submitted form. The client posts these form-encoded, but the
@@ -970,8 +962,7 @@ export const moderationRoutes = new Hono<App>({ strict: false })
 			// The room's own owners first; the token's roles are only read when that fails.
 			const runsRoom = canManageRoom(room, moderatorId)
 			if (!runsRoom) {
-				const roles = await authedRoles(c)
-				if (!roles?.some((role) => MODERATOR_ROLES.has(role))) {
+				if (!(await authedStaff(c))) {
 					return c.json({ success: false, error: 'Forbidden' }, 403)
 				}
 			}
@@ -1038,8 +1029,7 @@ export const moderationRoutes = new Hono<App>({ strict: false })
 			const moderatorId = await authedId(c)
 			if (moderatorId === null) return unauthorized(c)
 
-			const roles = await authedRoles(c)
-			if (!roles?.some((role) => MODERATOR_ROLES.has(role))) {
+			if (!(await authedStaff(c))) {
 				return c.json({ success: false, error: 'Forbidden' }, 403)
 			}
 

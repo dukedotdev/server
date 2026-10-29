@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import { call, usernamesFor, where } from './api'
+import { call, isAdmin, useAction, usernamesFor, where } from './api'
 
 import type { CustomAvatarItem } from '../../../api/src/custom-avatar-items-db'
 import type { SavedInvention } from '../../../api/src/inventions-db'
@@ -316,8 +316,10 @@ export function InventionPage({
 	const [invention, setInvention] = useState<SavedInvention | null | undefined>(undefined)
 	const [creator, setCreator] = useState<PublicAccount | null>(null)
 	const [error, setError] = useState('')
+	const [deleted, setDeleted] = useState<string | null>(null)
 
 	useEffect(() => {
+		setDeleted(null)
 		setInvention(undefined)
 		setCreator(null)
 		setError('')
@@ -337,6 +339,13 @@ export function InventionPage({
 		return (
 			<main className="shell wide">
 				<p className="error">{error}</p>
+			</main>
+		)
+	}
+	if (deleted !== null) {
+		return (
+			<main className="shell wide">
+				<p className="ok">{deleted} was deleted.</p>
 			</main>
 		)
 	}
@@ -421,6 +430,99 @@ export function InventionPage({
 					</dd>
 				</dl>
 			</section>
+
+			{/* Staff only, and cosmetic: `api` checks the token's role on the delete itself. */}
+			{isAdmin() && (
+				<StaffDelete
+					noun="invention"
+					name={invention.Name}
+					consequence="This deletes the invention for everyone, including its creator, and takes it out of the store. Players who already bought it lose it from their lists. It can't be undone."
+					onDelete={() => deleteInvention(invention.InventionId)}
+					onDeleted={() => setDeleted(invention.Name)}
+				/>
+			)}
 		</main>
+	)
+}
+
+/**
+ * Delete an invention through `api`'s own `POST /api/inventions/v2/delete` — creator-only,
+ * except that staff may take down anyone's (audit-logged there). The route refuses in-band,
+ * `Success: false` with a message, so that's read here rather than the status.
+ */
+async function deleteInvention(inventionId: number): Promise<void> {
+	const result = await call<{ Success?: boolean; Error?: string | null }>(
+		`${where().api}/api/inventions/v2/delete`,
+		{ json: { InventionId: inventionId }, authed: true }
+	)
+	if (result.Success !== true) throw new Error(result.Error || 'Couldn’t delete the invention.')
+}
+
+/**
+ * The staff delete card at the foot of a public page (an invention, a photo): a button, then
+ * a confirm step that says what deleting does. The same two steps as a room's takedown.
+ */
+export function StaffDelete({
+	noun,
+	name,
+	consequence,
+	onDelete,
+	onDeleted,
+}: {
+	/** What's being deleted, lowercase: "invention", "photo". */
+	noun: string
+	/** Its name, for the confirm heading; empty for something without one. */
+	name: string
+	/** What deleting does, shown on the confirm step. */
+	consequence: string
+	onDelete: () => Promise<void>
+	onDeleted: () => void
+}) {
+	const [confirming, setConfirming] = useState(false)
+	const { pending, error, run } = useAction()
+
+	if (!confirming) {
+		return (
+			<section className="card">
+				<h2>Delete {noun}</h2>
+				<p className="muted">Staff only.</p>
+				<button type="submit" onClick={() => setConfirming(true)}>
+					Delete {noun}
+				</button>
+			</section>
+		)
+	}
+
+	return (
+		<section className="card mod-dialog">
+			<h2>{name ? `Delete ${name}?` : `Delete this ${noun}?`}</h2>
+			<form
+				className="takedown-confirm"
+				onSubmit={(e) => {
+					e.preventDefault()
+					void run(async () => {
+						await onDelete()
+						onDeleted()
+						return ''
+					})
+				}}
+			>
+				<p className="muted">{consequence}</p>
+				{error && <p className="error">{error}</p>}
+				<div className="mod-filter-actions">
+					<button type="submit" disabled={pending}>
+						{pending ? 'Deleting…' : `Delete ${noun}`}
+					</button>
+					<button
+						type="button"
+						className="linkish"
+						onClick={() => setConfirming(false)}
+						disabled={pending}
+					>
+						Cancel
+					</button>
+				</div>
+			</form>
+		</section>
 	)
 }

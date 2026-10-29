@@ -9,7 +9,12 @@ import {
 	getSubRoom,
 } from '@repo/domain'
 import { withNotFound, withOnError } from '@repo/hono-helpers'
-import { studioBuildValidationId, validateAndGetAccountId, validateAndGetRoles } from '@repo/jwt'
+import {
+	isStaff,
+	studioBuildValidationId,
+	validateAndGetAccountId,
+	validateAndGetRoles,
+} from '@repo/jwt'
 
 import { hasStudioAccess } from '../../auth/src/platform-db'
 import cloudBuilds from './cloud-builds'
@@ -206,11 +211,7 @@ const app = new Hono<App>()
 			const account = await getAccount(c.env.DB, id)
 			roles = (await hasStudioAccess(c.env.DB, account, c.env.STUDIO_ROLLOUT)) ? ['betastudio'] : []
 		}
-		if (
-			caller !== null &&
-			caller !== id &&
-			!roles?.some((r) => r === 'developer' || r === 'moderator')
-		) {
+		if (caller !== null && caller !== id && !isStaff(roles)) {
 			// The SDK validates a registry against every owner of its room. Allow
 			// peers to inspect grants only when both currently manage the same room.
 			const shared = await c.env.DB.prepare(

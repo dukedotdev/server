@@ -46,6 +46,7 @@ import {
 } from '@repo/hono-helpers'
 import {
 	generateToken,
+	STAFF_ROLES,
 	TOKEN_TTL_SECONDS,
 	validateAndGetAccountId,
 	validateIdentityAssertion,
@@ -527,9 +528,7 @@ async function issueSession(
 	await setLastLoginTime(c.env.DB, accountId, new Date().toISOString())
 	await setLoginContext(c.env.DB, accountId, { ip: clientIp })
 
-	const staffRoles = (['developer', 'moderator'] as const).filter((role) =>
-		holdsRole(roleAccount, role)
-	)
+	const staffRoles = STAFF_ROLES.filter((role) => holdsRole(roleAccount, role))
 	if (staffRoles.length > 0) {
 		try {
 			await writeAuditLog(c.env.DB, {
@@ -1759,7 +1758,7 @@ const app = new Hono<App>()
 			// instead — the one thing a gap in an audit trail should never do quietly.
 			const staffRoles =
 				roleAccount && grantType !== 'refresh_token'
-					? (['developer', 'moderator'] as const).filter((role) => holdsRole(roleAccount, role))
+					? STAFF_ROLES.filter((role) => holdsRole(roleAccount, role))
 					: []
 			if (staffRoles.length > 0) {
 				try {

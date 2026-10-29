@@ -15,3 +15,5 @@ export {
 	TOKEN_TTL_SECONDS,
 } from './jwt'
 export type { IdentityAssertion, PhotonAuthClaims } from './jwt'
+export { isStaff, STAFF_ROLES } from './roles'
+export type { StaffRole } from './roles'

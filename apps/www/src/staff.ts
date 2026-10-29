@@ -16,7 +16,7 @@ import {
 } from '@repo/domain'
 import { PlatformType } from '@repo/domain/src/enums'
 import { intVar, logger } from '@repo/hono-helpers'
-import { validateAndGetAccountId, validateAndGetRoles } from '@repo/jwt'
+import { isStaff, validateAndGetAccountId, validateAndGetRoles } from '@repo/jwt'
 
 // The report table and the ban policy over it, owned (and migrated) by the `api` worker.
 // Imported rather than reimplemented: the SQL belongs with the table, and `banFromReport`
@@ -104,12 +104,6 @@ import type { App, Env } from './context'
  * {@link requireDeveloper}.
  */
 
-/**
- * Roles allowed through. The same set `api`'s warning write and `notify`'s internal
- * endpoints gate on — staff hold both roles, and moderation is not developer-only.
- */
-const STAFF_ROLES = new Set(['moderator', 'developer'])
-
 /** The notifications hub is a single global DO instance (see the `notify` worker). */
 const HUB_INSTANCE = 'global'
 
@@ -130,7 +124,7 @@ export const requireStaff: MiddlewareHandler<App> = async (c, next) => {
 	const secret = await c.env.JWT_SECRET.get()
 	const roles = await validateAndGetRoles(c.req.raw, secret)
 	if (roles === null) return c.json({ error: 'Unauthorized' }, 401)
-	if (!roles.some((role) => STAFF_ROLES.has(role))) return c.json({ error: 'Forbidden' }, 403)
+	if (!isStaff(roles)) return c.json({ error: 'Forbidden' }, 403)
 
 	const accountId = await validateAndGetAccountId(c.req.raw, secret)
 	// A token that carries a staff role but no integer `sub` can't be attributed to a

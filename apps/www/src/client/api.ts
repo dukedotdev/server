@@ -1,5 +1,7 @@
 import { useCallback, useState } from 'react'
 
+import { isStaff } from '@repo/jwt/src/roles'
+
 /**
  * The SPA's worker plumbing: the session token, where the workers live, and the one
  * `call` every view makes its requests through.
@@ -55,6 +57,14 @@ export function setToken(next: string | null) {
 export const hasToken = (): boolean => token !== null
 
 /**
+ * The session's `authorization` header, or none when signed out — for the rare read that has
+ * to see a raw status (a 404 meaning "not there") and so can't go through {@link call}.
+ */
+export function authHeader(): Record<string, string> {
+	return token ? { authorization: `Bearer ${token}` } : {}
+}
+
+/**
  * Filled in once `/api/config` lands, before any worker call is made — a module value
  * rather than a prop threaded through every form, since the components that call a
  * worker only render after the config resolves.
@@ -71,12 +81,6 @@ export function where(): Hosts {
 	if (hosts === null) throw new Error('Still starting up — please reload the page.')
 	return hosts
 }
-
-/**
- * Roles that unlock the admin controls. Mirrors the notify worker's `ADMIN_ROLES` gate —
- * this only decides whether to SHOW them; notify verifies the token on every call.
- */
-const ADMIN_ROLES = new Set(['developer', 'moderator'])
 
 /** The session token's `role` claim, decoded WITHOUT verifying it. Malformed reads as none. */
 function tokenRoles(): string[] {
@@ -98,7 +102,9 @@ function tokenRoles(): string[] {
  * whose endpoints reject the same token. A malformed token reads as "not admin".
  */
 export function isAdmin(): boolean {
-	return tokenRoles().some((r) => ADMIN_ROLES.has(r))
+	// Only decides whether to SHOW the staff controls; every worker behind them checks the
+	// verified token against the same `STAFF_ROLES`.
+	return isStaff(tokenRoles())
 }
 
 /**

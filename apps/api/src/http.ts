@@ -1,4 +1,9 @@
-import { validateAndGetAccountId, validateAndGetPlus, validateAndGetRoles } from '@repo/jwt'
+import {
+	isStaff,
+	validateAndGetAccountId,
+	validateAndGetPlus,
+	validateAndGetRoles,
+} from '@repo/jwt'
 
 import type { Context } from 'hono'
 import type { App } from './context'
@@ -20,6 +25,15 @@ export async function authedId(c: Context<App>): Promise<number | null> {
  */
 export async function authedRoles(c: Context<App>): Promise<string[] | null> {
 	return validateAndGetRoles(c.req.raw, await c.env.JWT_SECRET.get())
+}
+
+/**
+ * Whether the caller's token carries a staff role (`moderator` or `developer`). False for
+ * no token, as for a plain player's. What lets staff past an owner-only check — a takedown
+ * of someone else's photo or invention — so each such use should also write an audit row.
+ */
+export async function authedStaff(c: Context<App>): Promise<boolean> {
+	return isStaff(await authedRoles(c))
 }
 
 /**

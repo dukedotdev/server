@@ -18,6 +18,7 @@ import { downgradeRoom, needsDowngrade } from '../room-converter'
 import {
 	accountByUsername,
 	accountIdForUsername,
+	authHeader,
 	call,
 	hasToken,
 	isAdmin,
@@ -30,7 +31,13 @@ import {
 } from './api'
 import { DeviceLinkPage } from './DeviceLink'
 import { eventIdFromPath, EventPage, EventsPage } from './Events'
-import { customAvatarItemIdFromPath, inventionIdFromPath, InventionPage, ItemPage } from './Item'
+import {
+	customAvatarItemIdFromPath,
+	inventionIdFromPath,
+	InventionPage,
+	ItemPage,
+	StaffDelete,
+} from './Item'
 import { ModerationPage, PlayerBanStatus } from './Moderation'
 import { PumpleBossFight } from './PumpleBossFight'
 import { RoomsPage } from './Rooms'
@@ -1546,42 +1553,70 @@ function imageIdFromPath(path: string): number | null {
 	return match ? Number(match[1]) : null
 }
 
+/** What the image page shows of a photo. */
+interface PageImage {
+	ImageName: string
+	Accessibility: number
+	PlayerId: number
+}
+
 /**
- * One photo on its own page (`/image/<id>`) — just the image.
+ * One photo on its own page (`/image/<id>`) — the image, and for staff a Delete card.
  *
- * Read through `api`'s `GET /api/images/v6/:id` WITHOUT the session token, deliberately:
- * that route serves a private image to the player who took it, and this page is a public
- * link, so it must show only what anyone could see. Signed out or not, a private image is
- * the same 404 as an unknown id.
+ * Read through `api`'s `GET /api/images/v6/:id`. For everyone but staff that's WITHOUT the
+ * session token, deliberately: the route serves a private image to the player who took it,
+ * and this page is a public link, so it must show only what anyone could see. Signed out or
+ * not, a private image is the same 404 as an unknown id.
+ *
+ * Staff send the token, which the route answers with a private photo too: the moderation
+ * panel links a reported photo here so it can be deleted, and a reported photo may be one
+ * its owner has since made private.
  */
-async function fetchPublicImage(imageId: number): Promise<{ ImageName: string } | null> {
-	const res = await fetch(`${where().api}/api/images/v6/${imageId}`)
+async function fetchPageImage(imageId: number, staff: boolean): Promise<PageImage | null> {
+	const token = staff ? authHeader() : {}
+	const res = await fetch(`${where().api}/api/images/v6/${imageId}`, { headers: token })
 	if (res.status === 404) return null
 	if (!res.ok) throw new Error(`Couldn’t load the image (${res.status}).`)
-	const image = (await res.json()) as { ImageName: string; Accessibility: number }
+	const image = (await res.json()) as PageImage
 	// The route already refuses a private image to an anonymous caller; checked again so
-	// this page can't show one if that ever changes.
-	return image.Accessibility === Accessibility.Public ? image : null
+	// this page can't show one to a non-staff visitor if that ever changes.
+	return staff || image.Accessibility === Accessibility.Public ? image : null
+}
+
+/**
+ * Delete a photo through `api`'s `POST /api/images/v1/deletesaved` — owner-only, except that
+ * staff may take down anyone's (audit-logged there).
+ */
+async function deleteImage(imageName: string): Promise<void> {
+	await call(`${where().api}/api/images/v1/deletesaved`, {
+		json: { ImageName: imageName },
+		authed: true,
+	})
 }
 
 function ImagePage({ imageId, config }: { imageId: number; config: SiteConfig | undefined }) {
-	// undefined = not fetched yet; null = no public image with this id.
-	const [image, setImage] = useState<{ ImageName: string } | null | undefined>(undefined)
+	// undefined = not fetched yet; null = no image this visitor may see.
+	const [image, setImage] = useState<PageImage | null | undefined>(undefined)
 	const [error, setError] = useState('')
+	const [deleted, setDeleted] = useState(false)
+	const staff = isAdmin()
 
 	useEffect(() => {
 		// Waits for the config for the hostnames, as PlayerPage does.
 		if (config === undefined) return
 		setImage(undefined)
 		setError('')
-		void fetchPublicImage(imageId)
+		setDeleted(false)
+		void fetchPageImage(imageId, staff)
 			.then(setImage)
 			.catch((e) => setError(e instanceof Error ? e.message : String(e)))
-	}, [imageId, config])
+	}, [imageId, config, staff])
 
 	return (
 		<main className="shell wide image-page">
-			{error ? (
+			{deleted ? (
+				<p className="ok">The photo was deleted.</p>
+			) : error ? (
 				<p className="error">{error}</p>
 			) : image === undefined ? (
 				<p className="muted">Loading…</p>
@@ -1590,7 +1625,26 @@ function ImagePage({ imageId, config }: { imageId: number; config: SiteConfig | 
 					There&apos;s no image here — it&apos;s private, or it doesn&apos;t exist.
 				</p>
 			) : (
-				<img src={`${where().img}/${image.ImageName}`} alt="" />
+				<>
+					<img src={`${where().img}/${image.ImageName}`} alt="" />
+					{/* Staff only, and cosmetic: `api` checks the token's role on the delete. */}
+					{staff && (
+						<>
+							{image.Accessibility !== Accessibility.Public && (
+								<p className="muted">
+									This photo is private — only its owner and staff can see it.
+								</p>
+							)}
+							<StaffDelete
+								noun="photo"
+								name=""
+								consequence="This deletes the photo for everyone, including the player who took it, and can't be undone."
+								onDelete={() => deleteImage(image.ImageName)}
+								onDeleted={() => setDeleted(true)}
+							/>
+						</>
+					)}
+				</>
 			)}
 		</main>
 	)
