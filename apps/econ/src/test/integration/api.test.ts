@@ -4006,6 +4006,12 @@ describe('econ endpoints', () => {
 		expect(await res.json()).toEqual({ Value: [], Success: true, Error: null, error_id: null })
 	})
 
+	test('room-offer recent purchases are an empty result envelope', async () => {
+		const res = await exports.default.fetch(`${ORIGIN}/econ/roomOffer/room/31234/recentPurchases`)
+		expect(res.status).toBe(200)
+		expect(await res.json()).toEqual({ Value: [], Success: true, Error: null, error_id: null })
+	})
+
 	test('POST /api/ugcPurchasables/v1/items/bulk resolves custom avatar items, echoing RoomId', async () => {
 		const item = await createCustomAvatarItem(env.DB, {
 			customAvatarItemId: crypto.randomUUID(),
@@ -8329,6 +8335,7 @@ describe('econ endpoints', () => {
 			'GET /econ/roomInventoryItemTags/room/{roomId}',
 			'GET /econ/roomOffer/room/{roomId}',
 			'GET /econ/roomOffer/room/{roomId}/purchaseCounts',
+			'GET /econ/roomOffer/room/{roomId}/recentPurchases',
 			'GET /paintball-battle-pass/config',
 			'POST /api/CampusCard/v1/UpdateAndGetSubscription',
 			'POST /api/avatar/v1/lockeditems/bulk',

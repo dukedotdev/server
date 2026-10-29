@@ -5352,6 +5352,30 @@ const app = new Hono<App>({ strict: false })
 			return c.json([])
 		}
 	)
+	// A room's recent offer purchases. Nothing records them yet, so always an empty list,
+	// in the RecNet result envelope the client asks for (every build).
+	.get(
+		'/econ/roomOffer/room/:roomId/recentPurchases',
+		describeRoute({
+			tags: ['Econ'],
+			summary: 'A room’s recent offer purchases',
+			description:
+				'Empty stub: no room offer purchases are recorded yet. Answers the ' +
+				'`{ Value, Success, Error, error_id }` envelope with an empty `Value`.',
+			responses: {
+				200: json(
+					z.object({
+						Value: JsonArray,
+						Success: z.boolean(),
+						Error: z.string().nullable(),
+						error_id: z.string().nullable(),
+					}),
+					'An empty list in the RecNet result envelope'
+				),
+			},
+		}),
+		(c) => c.json({ Value: [], Success: true, Error: null, error_id: null })
+	)
 	.get(
 		'/econ/roomGiftDropShops/room/:roomId',
 		listRoute('A room’s gift-drop shops', 'Empty stub'),
