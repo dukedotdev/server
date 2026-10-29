@@ -17,6 +17,7 @@ import { AUDIT_LOG_SCHEMA_DDL } from '@repo/domain/src/audit-db'
 import { AVATAR_STUDIO_SCHEMA, avatarStudioFlags } from '@repo/domain/src/avatar-studio'
 import { PlatformType } from '@repo/domain/src/enums'
 import { getPendingGifts, RECEIVED_GIFT_SCHEMA_DDL } from '@repo/domain/src/gifts-db'
+import { IMAGE_SCHEMA_DDL } from '@repo/domain/src/images-db'
 import {
 	PRESENCE_SCHEMA_DDL,
 	PRESENCE_TTL_SECONDS,
@@ -149,6 +150,8 @@ beforeAll(async () => {
 	for (const stmt of STAT_SCHEMA_DDL) await env.DB.prepare(stmt).run()
 	// `audit_log` is owned by `api`; www files a row there for every ban and lift.
 	for (const stmt of AUDIT_LOG_SCHEMA_DDL) await env.DB.prepare(stmt).run()
+	// Read by the report search, which names a photo report's image.
+	for (const stmt of IMAGE_SCHEMA_DDL) await env.DB.prepare(stmt).run()
 	// `balance` and `received_gift` are owned by `econ`; a staff token gift writes both.
 	for (const stmt of BALANCE_SCHEMA_DDL) await env.DB.prepare(stmt).run()
 	for (const stmt of RECEIVED_GIFT_SCHEMA_DDL) await env.DB.prepare(stmt).run()
@@ -1257,6 +1260,31 @@ it('refuses a report with no player, and one a moderator files against themselve
 	// The self-report is a mistake every time, and the ban it would justify locks the
 	// panel's own operator out of the game.
 	expect((await staffPost('/api/staff/reports', 8110, { reportedPlayerId: 8110 })).status).toBe(400)
+})
+
+it('filters the report search by kind', async () => {
+	const target = 8177
+	const base = { reporterPlayerId: 8178, reportedPlayerId: target }
+	await createReport(env.DB, { ...base, details: 'player' })
+	await createReport(env.DB, { ...base, details: 'photo', imageId: 913 })
+	await createReport(env.DB, { ...base, details: 'invention', inventionId: 914 })
+	await createReport(env.DB, { ...base, details: 'event', eventId: 915 })
+
+	const search = async (kind: string) =>
+		(
+			(await (
+				await staffGet(`/api/staff/reports?reportedPlayerId=${target}&kind=${kind}`, 8110)
+			).json()) as { reports: Array<{ details: string }>; total: number }
+		).reports.map((r) => r.details)
+
+	expect(await search('photo')).toEqual(['photo'])
+	expect(await search('invention')).toEqual(['invention'])
+	expect(await search('event')).toEqual(['event'])
+	// A player report is one against none of the other kinds.
+	expect(await search('player')).toEqual(['player'])
+	expect(await search('chat')).toEqual([])
+	// An unknown kind is no filter, not "nothing".
+	expect((await search('bogus')).sort()).toEqual(['event', 'invention', 'photo', 'player'])
 })
 
 // The search is the panel's way into the log, so each filter is pinned separately: a

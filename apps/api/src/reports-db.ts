@@ -343,6 +343,27 @@ export async function banFromReport(
  * question). The count is a second statement rather than a window function, so the caller
  * can page without re-deriving the total — it counts the same predicate, unpaged.
  */
+/**
+ * What a report is against, as the staff search filters on it. The target id columns are
+ * mutually exclusive, and a row with none of them is a plain player report — so each kind
+ * is "its column is set", and `player` is "none of them are".
+ */
+export const REPORT_KINDS = ['player', 'event', 'invention', 'avatarItem', 'chat', 'photo'] as const
+export type ReportKind = (typeof REPORT_KINDS)[number]
+
+const REPORT_KIND_COLUMN: Record<Exclude<ReportKind, 'player'>, string> = {
+	event: 'event_id',
+	invention: 'invention_id',
+	avatarItem: 'custom_avatar_item_id',
+	chat: 'chat_message_id',
+	photo: 'image_id',
+}
+
+/** A `kind` from a query string, or null for none or one this doesn't know. */
+export function parseReportKind(raw: string | undefined): ReportKind | null {
+	return REPORT_KINDS.find((kind) => kind === raw) ?? null
+}
+
 export interface ReportSearch {
 	reportedPlayerId?: number | null
 	reporterPlayerId?: number | null
@@ -353,6 +374,8 @@ export interface ReportSearch {
 	from?: string | null
 	/** ISO-8601; EXCLUSIVE upper bound on `created_at`. */
 	to?: string | null
+	/** Only reports against this kind of thing; null/undefined = every kind. */
+	kind?: ReportKind | null
 }
 
 /** A page of search results, plus how many rows the filters match in total. */
@@ -381,6 +404,16 @@ export async function searchReports(
 	if (filters.banned != null) where('banned = ?', filters.banned ? 1 : 0)
 	if (filters.from) where('created_at >= ?', filters.from)
 	if (filters.to) where('created_at < ?', filters.to)
+	// No bind: the column names come from REPORT_KIND_COLUMN, never from the caller.
+	if (filters.kind === 'player') {
+		clauses.push(
+			Object.values(REPORT_KIND_COLUMN)
+				.map((column) => `${column} IS NULL`)
+				.join(' AND ')
+		)
+	} else if (filters.kind) {
+		clauses.push(`${REPORT_KIND_COLUMN[filters.kind]} IS NOT NULL`)
+	}
 
 	const predicate = clauses.length === 0 ? '' : ` WHERE ${clauses.join(' AND ')}`
 	// Clamped rather than trusted: `take` reaches this from a query string, and an

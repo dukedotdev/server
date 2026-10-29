@@ -33,6 +33,7 @@ import {
 	getReportById,
 	getReportsAgainst,
 	getTopReported,
+	parseReportKind,
 	searchReports,
 } from '../../api/src/reports-db'
 import { getWarningsAgainst } from '../../api/src/warnings-db'
@@ -368,6 +369,7 @@ export async function searchReportsHandler(c: Context<App>) {
 		banned: boolQuery(c, 'banned'),
 		from: dateQuery(c, 'from'),
 		to: dateQuery(c, 'to'),
+		kind: parseReportKind(c.req.query('kind')),
 	}
 	const page = await searchReports(c.env.DB, filters, {
 		skip: intQuery(c, 'skip') ?? 0,

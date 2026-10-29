@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { KickReportCategory } from '../../../notify/src/notification-payloads'
 import { accountIdForUsername, call, isAdmin, useAction, usernamesFor } from './api'
 
+import type { ReportKind } from '../../../api/src/reports-db'
 import type { PublicAccount } from './api'
 
 /**
@@ -241,12 +242,25 @@ function LiftedBan({ report, names }: { report: ReportRow; names: Map<number, Pu
  * only way to tell the kinds apart, so it is worth a column of its own.
  */
 function reportKind(report: ReportRow): string {
-	if (report.event_id !== null) return 'Event'
-	if (report.invention_id !== null) return 'Invention'
-	if (report.custom_avatar_item_id !== null) return 'Avatar item'
-	if (report.chat_message_id !== null) return 'Chat message'
-	if (report.image_id != null) return 'Photo'
-	return 'Player'
+	if (report.event_id !== null) return KIND_LABEL.event
+	if (report.invention_id !== null) return KIND_LABEL.invention
+	if (report.custom_avatar_item_id !== null) return KIND_LABEL.avatarItem
+	if (report.chat_message_id !== null) return KIND_LABEL.chat
+	if (report.image_id != null) return KIND_LABEL.photo
+	return KIND_LABEL.player
+}
+
+/**
+ * Each kind's label, keyed by the `kind` the search filters on (`REPORT_KINDS` in
+ * reports-db) — the Kind column and the Kind filter read from this one table.
+ */
+const KIND_LABEL: Record<ReportKind, string> = {
+	player: 'Player',
+	event: 'Event',
+	invention: 'Invention',
+	avatarItem: 'Avatar item',
+	chat: 'Chat message',
+	photo: 'Photo',
 }
 
 /**
@@ -756,6 +770,7 @@ interface SearchFilters {
 	reportedPlayerId: string
 	reporterPlayerId: string
 	reportCategory: string
+	kind: string
 	banned: string
 	from: string
 	to: string
@@ -765,6 +780,7 @@ const EMPTY_FILTERS: SearchFilters = {
 	reportedPlayerId: '',
 	reporterPlayerId: '',
 	reportCategory: '',
+	kind: '',
 	banned: '',
 	from: '',
 	to: '',
@@ -778,6 +794,7 @@ function filtersFromSearch(search: string): SearchFilters {
 		reportedPlayerId: read('reportedPlayerId'),
 		reporterPlayerId: read('reporterPlayerId'),
 		reportCategory: read('reportCategory'),
+		kind: read('kind'),
 		banned: read('banned'),
 		from: read('from'),
 		to: read('to'),
@@ -845,6 +862,7 @@ function ReportSearch({
 	if (applied.reportedPlayerId !== '') params.set('reportedPlayerId', applied.reportedPlayerId)
 	if (applied.reporterPlayerId !== '') params.set('reporterPlayerId', applied.reporterPlayerId)
 	if (applied.reportCategory !== '') params.set('reportCategory', applied.reportCategory)
+	if (applied.kind !== '') params.set('kind', applied.kind)
 	if (applied.banned !== '') params.set('banned', applied.banned)
 	// A date input gives a bare `YYYY-MM-DD`, so the window is sent as local midnights,
 	// which is what the moderator meant by it. `to` is EXCLUSIVE on the server, so the day
@@ -925,6 +943,17 @@ function ReportSearch({
 					>
 						<option value="">Any</option>
 						{Object.entries(CATEGORY_LABEL).map(([id, label]) => (
+							<option key={id} value={id}>
+								{label}
+							</option>
+						))}
+					</select>
+				</label>
+				<label>
+					Kind
+					<select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
+						<option value="">Any</option>
+						{Object.entries(KIND_LABEL).map(([id, label]) => (
 							<option key={id} value={id}>
 								{label}
 							</option>
