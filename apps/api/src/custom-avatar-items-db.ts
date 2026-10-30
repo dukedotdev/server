@@ -27,9 +27,12 @@
  * as JSON by 0022_custom_avatar_item_json.sql, applied under its own `migrations_table`).
  */
 
-import { COACH_ACCOUNT_ID } from './custom-avatar-items-load'
+import { COACH_ACCOUNT_ID, TOKENS_CURRENCY_TYPE } from './custom-avatar-items-load'
 
-/** Schema DDL (mirror of migrations/0022_custom_avatar_item_json.sql and 0035_custom_avatar_item_badge_room.sql). */
+/**
+ * Schema DDL (mirror of migrations/0022_custom_avatar_item_json.sql and
+ * 0035_custom_avatar_item_badge_room.sql; 0036 is a data backfill with no DDL).
+ */
 export const SCHEMA_DDL: string[] = [
 	`CREATE TABLE IF NOT EXISTS custom_avatar_item (
 		data TEXT NOT NULL,
@@ -115,7 +118,27 @@ export interface CustomAvatarItem {
 	CustomBadgeMetadata: unknown
 	RankedEntityId: string
 	PurchaseInfo: null
+	/**
+	 * SERVER-SIDE, not the client's: the `CurrencyType` `Price` is in. 2 `RecCenterTokens` on
+	 * everything the token store sells — a player's shirt (set when it is created) and almost
+	 * every first-party item. A TICKET REWARD carries its game's currency instead (1
+	 * `LaserTagTickets`, 100 `LostSkullsGold`, 101 `DraculaSilver`), written by the load from the
+	 * storefront dumps (`withStorefrontCurrency`), never by the export. Such an item is earned in
+	 * its own game: the token store's listings show only {@link TOKEN_PURCHASABLE} items and
+	 * `econ`'s bag refuses it. It still resolves by id (`bulk`, owned) so a player who earned it
+	 * can wear it. Optional only because a row from before 0036 may lack it. Served as stored —
+	 * the client's decoder drops a member it doesn't know.
+	 */
+	PurchaseCurrencyType?: number
 }
+
+/**
+ * The WHERE term a token-store listing (the search and the featured and hot feeds) shows an
+ * item by: priced in tokens. Read off the JSON rather than a generated column, so it adds no
+ * row reads — it filters rows each listing scans anyway (D1 bills rows read) — and needs no
+ * schema change; migrations/0036 backfilled the field onto the rows that lacked it.
+ */
+export const TOKEN_PURCHASABLE = `json_extract(data, '$.PurchaseCurrencyType') = ${TOKENS_CURRENCY_TYPE}`
 
 /**
  * `RecRoom.Avatars.OutfitType.CustomShirt` — the slot of a custom shirt, the one kind of custom
@@ -231,6 +254,7 @@ export async function createCustomAvatarItem(
 		CustomBadgeMetadata: null,
 		RankedEntityId: input.customAvatarItemId,
 		RankingContext: null,
+		PurchaseCurrencyType: TOKENS_CURRENCY_TYPE,
 	}
 	const row = await db
 		.prepare('INSERT INTO custom_avatar_item (data) VALUES (?1) RETURNING data')
@@ -256,7 +280,8 @@ export async function importCustomAvatarItem(
 			 ON CONFLICT(custom_avatar_item_id) DO UPDATE SET data = excluded.data
 			 RETURNING data`
 		)
-		.bind(JSON.stringify(stored))
+		// A record naming no currency is a token item, as the load stores it.
+		.bind(JSON.stringify({ PurchaseCurrencyType: TOKENS_CURRENCY_TYPE, ...stored }))
 		.first<Row>()
 	if (!row) throw new Error('custom_avatar_item import returned no row')
 	return toDto(row)
@@ -388,6 +413,7 @@ export async function listFeaturedCustomAvatarItems(
 	const { results } = await db
 		.prepare(
 			`SELECT data FROM custom_avatar_item WHERE is_featured = 1 AND accessibility != 0
+			 AND ${TOKEN_PURCHASABLE}
 			 ORDER BY created_at DESC, custom_avatar_item_id LIMIT ?1`
 		)
 		.bind(limit)
@@ -407,7 +433,7 @@ export async function listHotCustomAvatarItems(
 ): Promise<CustomAvatarItem[]> {
 	const { results } = await db
 		.prepare(
-			`SELECT data FROM custom_avatar_item WHERE accessibility != 0
+			`SELECT data FROM custom_avatar_item WHERE accessibility != 0 AND ${TOKEN_PURCHASABLE}
 			 ORDER BY created_at DESC, custom_avatar_item_id LIMIT ?1`
 		)
 		.bind(limit)
@@ -496,7 +522,8 @@ export async function searchCustomAvatarItems(
 	const skip = Math.max(search.skip ?? 0, 0)
 	if (take === 0) return []
 
-	const where = ['accessibility != 0']
+	// Only what tokens buy: a ticket reward is earned in its own game, so the search never finds it.
+	const where = ['accessibility != 0', TOKEN_PURCHASABLE]
 	const binds: Array<number | string> = []
 	/** Bind a value and get its placeholder, so the numbering can't drift as clauses are added. */
 	const bind = (value: number | string): string => `?${binds.push(value)}`

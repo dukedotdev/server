@@ -464,6 +464,13 @@ export const CustomAvatarItemDto = z.object({
 	CustomBadgeMetadata: z.unknown().nullable(),
 	RankedEntityId: z.string(),
 	PurchaseInfo: z.null(),
+	PurchaseCurrencyType: z
+		.int()
+		.optional()
+		.describe(
+			'Server-side: set only on a ticket reward, the game currency `Price` is in (1 ' +
+				'LaserTagTickets, 100 LostSkullsGold, 101 DraculaSilver). Not sold for tokens'
+		),
 })
 
 /** The JSON body `PUT /api/customAvatarItems/v1/:id` takes; null leaves a field unchanged. */

@@ -13,6 +13,7 @@
  * change on the way in: `PurchaseInfo`, a store-side projection the worker fills at read time,
  * is stripped; `CreatorAccountId` is FORCED to the Coach account; and each save's
  * `ThumbnailFileName` is put under the `avatar/` prefix — see {@link customAvatarItemRowLiteral}.
+ * A ticket reward is also priced off the storefronts before that — see {@link withStorefrontCurrency}.
  */
 
 /**
@@ -35,6 +36,66 @@ export interface CustomAvatarItemExportRecord {
 	CustomAvatarItemId: string
 	PurchaseInfo?: unknown
 	[key: string]: unknown
+}
+
+/** `CurrencyType.RecCenterTokens` (econ's `currency.ts`): what an ordinary item costs. */
+export const TOKENS_CURRENCY_TYPE = 2
+
+/** What an item that is NOT sold for tokens is priced in, off its storefront listing. */
+export interface StorefrontCurrency {
+	/** The listing's currency, e.g. 1 `LaserTagTickets`, 100 `LostSkullsGold`. Never tokens. */
+	currencyType: number
+	price: number
+}
+
+/**
+ * The items the storefronts (`apps/econ/static/storefronts/sf*.json`) sell ONLY for something
+ * other than tokens, by lowercased `CustomAvatarItemId` — the listing's
+ * `GiftDrop.AvatarItemInfo.DownloadableAvatarItemId`. These are ticket rewards (the Laser Tag,
+ * Lost Skulls and Dracula stores): earned and spent in their own game, never bought from the
+ * token store. An item with a token price on ANY listing is left out, so it stays an ordinary
+ * item; of an item's non-token prices the first listed wins.
+ */
+export function storefrontCurrencies(storefronts: unknown[]): Map<string, StorefrontCurrency> {
+	const tokens = new Set<string>()
+	const other = new Map<string, StorefrontCurrency>()
+	for (const storefront of storefronts) {
+		const items = (storefront as { StoreItems?: unknown } | null)?.StoreItems
+		if (!Array.isArray(items)) continue
+		for (const item of items as Array<{
+			GiftDrop?: { AvatarItemInfo?: { DownloadableAvatarItemId?: unknown } | null } | null
+			Prices?: Array<{ CurrencyType?: unknown; Price?: unknown }> | null
+		}>) {
+			const id = item?.GiftDrop?.AvatarItemInfo?.DownloadableAvatarItemId
+			if (typeof id !== 'string' || id === '') continue
+			const key = id.toLowerCase()
+			for (const { CurrencyType: currencyType, Price: price } of item.Prices ?? []) {
+				if (typeof currencyType !== 'number' || typeof price !== 'number') continue
+				if (currencyType === TOKENS_CURRENCY_TYPE) tokens.add(key)
+				else if (!other.has(key)) other.set(key, { currencyType, price })
+			}
+		}
+	}
+	for (const key of tokens) other.delete(key)
+	return other
+}
+
+/**
+ * A record priced as the storefronts price it, its `PurchaseCurrencyType` always set: an item
+ * {@link storefrontCurrencies} names takes that listing's `Price` and currency, which takes it
+ * out of the token store (`api`'s search and feeds, `econ`'s bag) and prices its purchase info
+ * in that currency; everything else is {@link TOKENS_CURRENCY_TYPE}, what the token store lists
+ * — so a reload after the storefronts change re-derives it either way. The export file itself
+ * is never rewritten.
+ */
+export function withStorefrontCurrency(
+	record: CustomAvatarItemExportRecord,
+	currencies: Map<string, StorefrontCurrency>
+): CustomAvatarItemExportRecord {
+	const currency = currencies.get(record.CustomAvatarItemId.toLowerCase())
+	return currency === undefined
+		? { ...record, PurchaseCurrencyType: TOKENS_CURRENCY_TYPE }
+		: { ...record, Price: currency.price, PurchaseCurrencyType: currency.currencyType }
 }
 
 /**
@@ -126,7 +187,14 @@ export function customAvatarItemRowLiteral(record: CustomAvatarItemExportRecord)
 				}
 			})
 		: stored.CurrentSaves
-	const row = { ...stored, CreatorAccountId: COACH_ACCOUNT_ID, CurrentSaves: saves }
+	// Every row names its currency, and the token store lists only tokens: a record that names
+	// none (the migration generator's, which skips the storefronts) is a token item.
+	const row = {
+		PurchaseCurrencyType: TOKENS_CURRENCY_TYPE,
+		...stored,
+		CreatorAccountId: COACH_ACCOUNT_ID,
+		CurrentSaves: saves,
+	}
 	return `'${JSON.stringify(row).replaceAll("'", "''")}'`
 }
 

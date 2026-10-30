@@ -50,7 +50,11 @@ import {
 	importCustomAvatarItem,
 	MAX_PLAYER_ITEM_PRICE,
 } from '../../custom-avatar-items-db'
-import { customAvatarItemRowLiteral } from '../../custom-avatar-items-load'
+import {
+	customAvatarItemRowLiteral,
+	storefrontCurrencies,
+	withStorefrontCurrency,
+} from '../../custom-avatar-items-load'
 import {
 	countGoing,
 	SCHEMA_DDL as EVENTS_SCHEMA_DDL,
@@ -1487,6 +1491,8 @@ describe('public endpoints', () => {
 			],
 		})
 		expect(JSON.parse(literal.slice(1, -1))).toEqual({
+			// A record that names no currency is stored as a token item.
+			PurchaseCurrencyType: 2,
 			CustomAvatarItemId: '83fe651f-15b3-46a7-8afc-adec32c35568',
 			CreatorAccountId: 1,
 			CurrentSaves: [
@@ -1508,6 +1514,104 @@ describe('public endpoints', () => {
 				},
 			],
 		})
+	})
+
+	test('the load prices a ticket reward off the storefronts, and only one sold for nothing but a game currency', () => {
+		const listing = (id: string, prices: Array<[number, number]>) => ({
+			GiftDrop: { AvatarItemInfo: { DownloadableAvatarItemId: id } },
+			Prices: prices.map(([CurrencyType, Price]) => ({ CurrencyType, Price })),
+		})
+		const currencies = storefrontCurrencies([
+			// The Laser Tag store (`sf1.json`): tickets only.
+			{ StoreItems: [listing('AAAA-ticket', [[1, 2500]]), listing('bbbb-both', [[1, 900]])] },
+			// The token store also sells one of them, so that one stays an ordinary item.
+			{ StoreItems: [listing('bbbb-both', [[2, 4000]]), listing('cccc-tokens', [[2, 850]])] },
+			// The 2023 store's format has no `AvatarItemInfo`: nothing to match, and no error.
+			{ StoreItems: [{ GiftDrop: { AvatarItemDesc: 'x,,,' }, Prices: [] }] },
+		])
+		expect([...currencies]).toEqual([['aaaa-ticket', { currencyType: 1, price: 2500 }]])
+
+		// The export's price and file are left as they are; the ROW takes the listing's.
+		expect(
+			withStorefrontCurrency({ CustomAvatarItemId: 'AAAA-ticket', Price: 0 }, currencies)
+		).toEqual({ CustomAvatarItemId: 'AAAA-ticket', Price: 2500, PurchaseCurrencyType: 1 })
+		// An item the storefronts sell for tokens (or don't list) is a token item, so a stale
+		// game currency is reset rather than kept.
+		expect(
+			withStorefrontCurrency(
+				{ CustomAvatarItemId: 'bbbb-both', Price: 4000, PurchaseCurrencyType: 1 },
+				currencies
+			)
+		).toEqual({ CustomAvatarItemId: 'bbbb-both', Price: 4000, PurchaseCurrencyType: 2 })
+	})
+
+	test('a ticket reward stays out of the token store but still resolves by id', async () => {
+		await env.DB.prepare('DELETE FROM custom_avatar_item').run()
+		const base = {
+			Accessibility: 1,
+			BaseAvatarItemColor: null,
+			BaseAvatarItemId: null,
+			CreatedAt: '2026-09-22T00:00:00.000Z',
+			CreatorAccountId: 1,
+			CurrentSaves: [],
+			CustomBadgeMetadata: null,
+			Description: '',
+			DesignFilename: null,
+			ForceCannotPublish: false,
+			IsFeatured: true,
+			IsRecRoomApproved: true,
+			ModifiedAt: '2026-09-22T00:00:00.000Z',
+			OutfitType: 200,
+			PreviewOrientation: 0,
+			RankingContext: null,
+			Tags: [],
+			ThumbnailImageFilename: null,
+		}
+		const ordinary = crypto.randomUUID()
+		const reward = crypto.randomUUID()
+		await importCustomAvatarItem(env.DB, {
+			...base,
+			CustomAvatarItemId: ordinary,
+			RankedEntityId: ordinary,
+			Name: 'Laser Tag Gloves (Gold)',
+			Price: 3000,
+		})
+		await importCustomAvatarItem(env.DB, {
+			...base,
+			CustomAvatarItemId: reward,
+			RankedEntityId: reward,
+			Name: 'Laser Tag Gloves (Blue)',
+			Price: 2500,
+			PurchaseCurrencyType: 1,
+		})
+
+		const names = async (path: string) => {
+			const res = await exports.default.fetch(`${ORIGIN}${path}`)
+			expect(res.status, path).toBe(200)
+			const body = (await res.json()) as
+				Array<{ Name: string }> | { Results: Array<{ Name: string }> }
+			return (Array.isArray(body) ? body : body.Results).map((i) => i.Name)
+		}
+		// Every token-store listing: the search (with and without the coach filter) and both feeds.
+		for (const path of [
+			'/api/customAvatarItems/v1/search?searchQuery=laser',
+			'/api/customAvatarItems/v1/search?includeCoachItems=True&outfitTypes=200',
+			'/api/customAvatarItems/v1/featured',
+			'/api/customAvatarItems/v1/hot',
+		]) {
+			expect(await names(path), path).toEqual(['Laser Tag Gloves (Gold)'])
+		}
+
+		// By id it still resolves, so a player who earned it in its game can wear it.
+		const bulk = await exports.default.fetch(`${ORIGIN}/api/customAvatarItems/v1/bulk`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/x-www-form-urlencoded', ...(await bearer('42')) },
+			body: new URLSearchParams([['customAvatarItemIds', reward]]),
+		})
+		expect(bulk.status).toBe(200)
+		expect(((await bulk.json()) as Array<{ Name: string }>).map((i) => i.Name)).toEqual([
+			'Laser Tag Gloves (Blue)',
+		])
 	})
 
 	test('GET /api/customAvatarItems/v1/search serves an imported first-party item as exported', async () => {
@@ -1609,7 +1713,8 @@ describe('public endpoints', () => {
 				'&outfitTypes=301&includePurchaseInfos=True&includeCoachItems=True&ordering=0&skip=0' +
 				'&take=100&unityAssetTarget=0&unityAssetVersion=3'
 		)
-		expect(store).toEqual([{ ...wings, PurchaseInfo: null }])
+		// …and the currency it sells in, which an import names as tokens when the record doesn't.
+		expect(store).toEqual([{ ...wings, PurchaseInfo: null, PurchaseCurrencyType: 2 }])
 
 		// The same query from a Quest (`unityAssetTarget=2`, Android/Oculus) serves the same
 		// record with its assetbundles pointed at the `quest/` builds, and nothing else moved.
@@ -1621,6 +1726,7 @@ describe('public endpoints', () => {
 			{
 				...wings,
 				PurchaseInfo: null,
+				PurchaseCurrencyType: 2,
 				CurrentSaves: wings.CurrentSaves.map((save) => ({
 					...save,
 					UnityAsset: `quest/${save.UnityAsset}`,

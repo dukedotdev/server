@@ -13,6 +13,7 @@ import {
 
 import { parseMultipart } from '../../../studio/src/multipart'
 import { getCustomAvatarItem, toQuestCustomAvatarItem } from '../custom-avatar-items-db'
+import { TOKENS_CURRENCY_TYPE } from '../custom-avatar-items-load'
 import { authedId, authedRoles } from '../http'
 
 import type { Context } from 'hono'
@@ -152,6 +153,8 @@ export const avatarStudioRoutes = new Hono<App>()
 			CustomBadgeMetadata: slot === 1000 ? { RoomId: badgeRoomId } : null,
 			RankedEntityId: itemId,
 			PurchaseInfo: null,
+			// Sold for tokens, like every player-made item: the token store lists only these.
+			PurchaseCurrencyType: TOKENS_CURRENCY_TYPE,
 		}
 		await c.env.DB.prepare('INSERT INTO custom_avatar_item(data) VALUES (?)')
 			.bind(JSON.stringify(item))

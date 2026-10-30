@@ -240,7 +240,14 @@ inconsistency here without checking the client first.
   so first-party prices are written into the export from the storefront dump
   (`apps/econ/static/db/Watch_EnumValue_3.json`, joined on
   `AvatarItemInfo.DownloadableAvatarItemId`) by `apps/api/scripts/price-custom-avatar-items.ts`
-  before loading. Serve both through one shape: the shirt carries
+  before loading. Every row names the `CurrencyType` its `Price` is in as a server-side
+  `PurchaseCurrencyType`: 2 (tokens) on everything the token store sells, and the token store
+  (search, featured, hot) lists ONLY those (`TOKEN_PURCHASABLE`) — so every write must set it
+  (the creates do; 0036 backfilled older rows). A TICKET REWARD — an item the
+  `storefronts/sf*.json` dumps sell only for a game's own currency (Laser Tag tickets 1, Lost
+  Skulls gold 100, Dracula silver 101) — gets that currency and `Price` from the LOAD
+  (`withStorefrontCurrency`), which keeps it out of the token store and `econ`'s bag, while
+  `bulk`/owned still resolve it so an earned one renders. Serve both through one shape: the shirt carries
   empty `CurrentSaves`/`Tags` and null `CustomBadgeMetadata`, never a missing key. The saves
   name their assetbundles and thumbnails by bare filename; storing the record does nothing
   about serving those files.

@@ -6234,6 +6234,42 @@ describe('econ endpoints', () => {
 		expect(wrongBody.Error).toBe('Currency type not available for this item')
 	})
 
+	test('a ticket reward is never sold for tokens, and its purchase info names its own currency', async () => {
+		// A ticket reward: the load priced it off a storefront that sells it only for Laser Tag
+		// Tickets, so the row carries that currency and the listing's price.
+		const plain = await customItem(1, 2500)
+		const reward = await importCustomAvatarItem(env.DB, {
+			...plain,
+			PurchaseCurrencyType: CurrencyType.LaserTagTickets,
+		})
+		expect(reward.PurchaseCurrencyType).toBe(CurrencyType.LaserTagTickets)
+
+		// Not in tokens, and not in its own currency either: it is earned in its game's store,
+		// which sells it as a numbered catalog line, never as a custom (guid) line here.
+		for (const currency of [CurrencyType.RecCenterTokens, CurrencyType.LaserTagTickets]) {
+			const res = await bulkPurchase('1628', {
+				PurchaseItemRequests: [customLine(reward.CustomAvatarItemId, 2500)],
+				CurrencyType: currency,
+			})
+			const body = (await res.json()) as BulkBody
+			expect(body.Success).toBe(false)
+			expect(body.Error).toBe("This item is earned in its game's store, not sold for tokens")
+		}
+		expect(await tokens(1628)).toBe(DEFAULT_STARTING_TOKENS)
+
+		const info = await exports.default.fetch(`${ORIGIN}/api/items/purchaseInfos`, {
+			method: 'POST',
+			headers: { ...(await bearer()), 'content-type': 'application/json' },
+			body: JSON.stringify({ Ids: [{ itemType: 3, itemId: reward.CustomAvatarItemId }] }),
+		})
+		const [entry] = (await info.json()) as Array<{
+			Prices: Array<{ CurrencyType: number; Price: number }>
+		}>
+		expect(entry?.Prices).toMatchObject([
+			{ CurrencyType: CurrencyType.LaserTagTickets, Price: 2500 },
+		])
+	})
+
 	test('POST /api/items/bulkpurchase 404s a bag gifting to a player that does not exist', async () => {
 		const res = await bulkPurchase('970', {
 			PurchaseItemRequests: [

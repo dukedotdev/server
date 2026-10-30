@@ -5,6 +5,8 @@ import Table from 'cli-table3'
 import {
 	customAvatarItemUpsertStatements,
 	readCustomAvatarItemExport,
+	storefrontCurrencies,
+	withStorefrontCurrency,
 } from '../../../../apps/api/src/custom-avatar-items-load'
 import {
 	DEFAULT_STARTING_TOKENS,
@@ -286,12 +288,20 @@ const CUSTOM_AVATAR_ITEM_EXPORTS = [
 ]
 
 /**
+ * The storefront dumps a load prices ticket rewards from (`storefrontCurrencies`): an item they
+ * sell only for a game's own currency is kept out of the token store.
+ */
+const STOREFRONTS_DIR = 'apps/econ/static/storefronts'
+
+/**
  * Load the first-party custom avatar items into `custom_avatar_item` (owned by the `api`
  * worker). Like `runx catalog load`: the table's STRUCTURE is a migration, its first-party
  * CONTENTS are not, and this is the reload. Each record lands as the row's JSON with its
  * `CreatorAccountId` forced to the Coach account (1) — what makes it stock content here — and
  * each save's `ThumbnailFileName` put under `avatar/` and its assetbundle hashes blanked — they
- * are the PC builds' hashes, and the same save serves the Quest builds too. (The statements
+ * are the PC builds' hashes, and the same save serves the Quest builds too. An item the
+ * storefronts sell only for a game's own currency (a ticket reward) takes that listing's price
+ * and currency, which keeps it out of the token store. (The statements
  * come from api's `custom-avatar-items-load.ts`, the same ones the migration generator writes.)
  * An id already present is REPLACED, and nothing is deleted — the players' own shirts share the
  * table and an export never mentions them. Re-running is always safe.
@@ -336,7 +346,20 @@ const caiLoad = new Command('cai-load')
 		}
 		if (records.length === 0)
 			throw new Error('the export holds no records — refusing to call that a load')
-		const statements = customAvatarItemUpsertStatements(records)
+
+		const storefrontsDir = path.join(getRepoRoot(), STOREFRONTS_DIR)
+		const storefronts: unknown[] = []
+		for (const name of (await fs.readdir(storefrontsDir)).filter((n) => n.endsWith('.json'))) {
+			const text = await fs.readFile(path.join(storefrontsDir, name), 'utf8')
+			storefronts.push(JSON.parse(text.replace(/^\uFEFF/, '')) as unknown)
+		}
+		const currencies = storefrontCurrencies(storefronts)
+		const priced = records.map((record) => withStorefrontCurrency(record, currencies))
+		const ticketRewards = priced.filter((record) => 'PurchaseCurrencyType' in record).length
+		console.log(
+			`${ticketRewards} item(s) sold only for a game currency (from ${storefronts.length} storefronts): kept out of the token store`
+		)
+		const statements = customAvatarItemUpsertStatements(priced)
 		const sql = statements.join('\n')
 
 		console.log(

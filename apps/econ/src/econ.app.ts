@@ -1239,7 +1239,9 @@ const PURCHASE_METHOD_TYPE_GUID = 1
  * floor (`api`'s `/api/customAvatarItems/v1/minPriceForPublicItem`) is a token price, and the
  * `price` column it writes is the same number. It must NOT be a room currency — those are
  * scoped to a room this endpoint knows nothing about, and the client holds no balance to pay
- * one with, so the item would draw a price it can never meet.
+ * one with, so the item would draw a price it can never meet. The one exception is a TICKET
+ * REWARD (`PurchaseCurrencyType`, set by the load from the storefront dumps): it is priced in
+ * its game's currency, as that game's store lists it, because tokens never buy it.
  *
  * The rest is what the row can honestly say:
  *  - `AvailableAt` is the item's creation — the moment it began being sellable. There is no
@@ -1266,7 +1268,8 @@ function toItemPurchaseInfo(item: CustomAvatarItem): ItemPurchaseInfo {
 		},
 		Prices: [
 			{
-				CurrencyType: CurrencyType.RecCenterTokens,
+				// A ticket reward is priced in its own game's currency, as its storefront lists it.
+				CurrencyType: item.PurchaseCurrencyType ?? CurrencyType.RecCenterTokens,
 				Price: item.Price,
 				StorefrontSaleData: { SalePercent: 0, SaleStartDate: null, SaleEndDate: null },
 			},
@@ -2329,6 +2332,17 @@ function resolveCustomLine(
 	}
 	if (custom.owned.get(receiverId)?.has(guid) === true) {
 		return { method, code: UpdateResponse.AlreadyOwned, error: 'Already owned' }
+	}
+	// A ticket reward (a non-token `PurchaseCurrencyType`, set by the load from the storefronts)
+	// is earned and bought in its own game's store, never here: the token store doesn't list it.
+	if (
+		(item.PurchaseCurrencyType ?? CurrencyType.RecCenterTokens) !== CurrencyType.RecCenterTokens
+	) {
+		return {
+			method,
+			code: UpdateResponse.NoItemAvailable,
+			error: "This item is earned in its game's store, not sold for tokens",
+		}
 	}
 	if (currencyType !== CurrencyType.RecCenterTokens) {
 		return {

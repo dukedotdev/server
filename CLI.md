@@ -136,6 +136,19 @@ statement count without writing.
 The saves in an export name their assetbundles by bare filename; the load stores the
 names only.
 
+**Ticket rewards.** The load also reads every storefront dump in
+`apps/econ/static/storefronts/`. An item they sell ONLY for a game's own currency — the Laser
+Tag store's tickets (`sf1`, currency 1), Lost Skulls gold (`sf100`, 100), Dracula silver
+(`sf101`, 101) — is stored with that listing's `Price` and that currency as a server-side
+`PurchaseCurrencyType`; every other item is stored with `PurchaseCurrencyType` 2 (tokens),
+and so is an item with a token price on any listing. The token store shows only 2: the
+custom-item search and the featured/hot feeds leave a ticket reward out, `econ`'s bag refuses
+to sell it as a custom line, and `purchaseInfos` prices it in its own currency. It still
+resolves by id (`bulk`, owned), so a player who earns it in its game can wear it. Only the ROW
+changes: the export files are never rewritten, and a reload after the storefronts change
+re-derives it. (Player-made items are given 2 when they are created; `api` migration 0036
+backfilled the rows from before.)
+
 A record's `Price` is what a purchase charges, and the official export mostly says 0. The
 prices come from a storefront dump instead, `apps/econ/static/db/Watch_EnumValue_3.json`
 (a `{ StoreItems }` page with price and rarity, joined on
