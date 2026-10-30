@@ -1073,6 +1073,9 @@ function instanceFieldsFromRoom(room: Room, subRoomId?: number) {
 		dataBlob: subRoomDataBlob(sub),
 		name,
 		maxCapacity: num(sub?.MaxPlayers, 4),
+		// The subroom lets players drop into a game already under way, so matchmaking may
+		// reuse an in-progress instance rather than open a fresh one beside it.
+		supportsJoinInProgress: sub?.SupportsJoinInProgress === true,
 		roomInstanceType: room.IsDorm === true ? RoomInstanceType.Dormroom : RoomInstanceType.Public,
 		isDorm: room.IsDorm === true,
 	}
@@ -1090,7 +1093,8 @@ function roomInstanceFromRoom(
 	instanceId: number,
 	photonRoomId: string,
 	subRoomId?: number,
-	eventId = 0
+	eventId = 0,
+	isInProgress = false
 ) {
 	const f = instanceFieldsFromRoom(room, subRoomId)
 	// The same region the connection info names its Photon apps for — see photonApps.
@@ -1112,7 +1116,7 @@ function roomInstanceFromRoom(
 		maxCapacity: f.maxCapacity,
 		isFull: false,
 		isPrivate: isPrivate || f.isDorm,
-		isInProgress: false,
+		isInProgress,
 		EncryptVoiceChat: false,
 	}
 }
@@ -1647,7 +1651,8 @@ async function resolveRoomInstance(
 					gameVersion,
 					f.subRoomId,
 					currentInstanceId,
-					eventId
+					eventId,
+					f.supportsJoinInProgress
 				)
 	if (!instance) {
 		instance = await createRoomInstance(c.env.DB, {
@@ -1673,7 +1678,8 @@ async function resolveRoomInstance(
 			instance.roomInstanceId,
 			instance.photonRoomId,
 			f.subRoomId,
-			instance.eventId
+			instance.eventId,
+			instance.isInProgress
 		),
 		errorCode: MatchmakingErrorCode.Success,
 	}

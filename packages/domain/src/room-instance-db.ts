@@ -497,7 +497,7 @@ export async function deleteRoomInstancesByRoom(db: D1Database, roomId: number):
 
 /**
  * The oldest joinable public instance of a room (not private, not full, joins
- * enabled, not already in progress, not set to `Ignore`) that is running `gameVersion`,
+ * enabled, not already in progress unless `joinInProgress`, not set to `Ignore`) that is running `gameVersion`,
  * or null when there's none to join. Used by matchmaking to reuse an existing instance
  * before creating a new one. An instance set to `Avoid` is a candidate, but ranks behind
  * every `Default` one however old it is (see {@link MatchmakingPolicy}).
@@ -529,6 +529,12 @@ export async function deleteRoomInstancesByRoom(db: D1Database, roomId: number):
  * stamped with that event, so its guests gather in the event's session rather than
  * scattering into whatever public instance the room has open; and a plain room matchmake
  * never lands in an event's session, which for a private event is its guest list's alone.
+ *
+ * `joinInProgress` admits instances whose game has already started — set when the
+ * subroom says `SupportsJoinInProgress`, so a player drops into a running round instead
+ * of being given an empty instance beside it. A not-yet-started instance still ranks
+ * ahead of a running one (within the same matchmaking policy), so a waiting lobby fills
+ * before anyone is put mid-game.
  */
 export async function getJoinableInstance(
 	db: D1Database,
@@ -536,7 +542,8 @@ export async function getJoinableInstance(
 	gameVersion: string,
 	subRoomId?: number,
 	excludeInstanceId?: number,
-	eventId = 0
+	eventId = 0,
+	joinInProgress = false
 ): Promise<RoomInstanceDto | null> {
 	const binds: Array<number | string> = [roomId, gameBuild(gameVersion) ?? '', eventId]
 	const filters: string[] = []
@@ -553,9 +560,9 @@ export async function getJoinableInstance(
 			`SELECT data FROM room_instance
 			 WHERE room_id = ?1 AND game_version = ?2 AND COALESCE(event_id, 0) = ?3
 			   AND is_private = 0 AND is_full = 0 AND join_disabled = 0
-			   AND is_in_progress = 0
+			   ${joinInProgress ? '' : 'AND is_in_progress = 0'}
 			   AND matchmaking_policy != ${MatchmakingPolicy.Ignore} ${filters.join(' ')}
-			 ORDER BY matchmaking_policy, id LIMIT 1`
+			 ORDER BY matchmaking_policy, is_in_progress, id LIMIT 1`
 		)
 		.bind(...binds)
 		.first<{ data: string }>()

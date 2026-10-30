@@ -136,6 +136,23 @@ const TEST_ROOMS = [
 			{ SubRoomId: 35, UnitySceneId: SECOND_SUBROOM_SCENE, MaxPlayers: 6 },
 		],
 	},
+	{
+		// One subroom that lets players join a game already under way (like Run The Block's
+		// `TheBlock`) and one that doesn't — in-progress reuse is decided per subroom.
+		RoomId: 88,
+		Name: 'JoinInProgressRoom',
+		IsDorm: false,
+		Accessibility: 1,
+		SubRooms: [
+			{
+				SubRoomId: 88,
+				UnitySceneId: RECCENTER_SCENE,
+				MaxPlayers: 10,
+				SupportsJoinInProgress: true,
+			},
+			{ SubRoomId: 89, UnitySceneId: SECOND_SUBROOM_SCENE, MaxPlayers: 10 },
+		],
+	},
 ]
 
 beforeAll(async () => {
@@ -3057,6 +3074,59 @@ describe('auth-gated endpoints', () => {
 		// than a third instance opened.
 		expect((await setPolicy(b, '2', '4202')).status).toBe(200)
 		expect(await spawn('4205')).toBe(a)
+	})
+
+	test('POST /matchmake/room reuses an in-progress instance only when the subroom supports join-in-progress', async () => {
+		const spawn = async (subRoomId: number, player: string) => {
+			const res = await exports.default.fetch(`${ORIGIN}/matchmake/room/88/${subRoomId}`, {
+				method: 'POST',
+				headers: await bearer(player),
+			})
+			return ((await res.json()) as {
+				roomInstance: { roomInstanceId: number; isInProgress: boolean }
+			}).roomInstance
+		}
+		const startGame = async (instanceId: number, player: string) => {
+			const res = await exports.default.fetch(`${ORIGIN}/roominstance/${instanceId}/inprogress`, {
+				method: 'PUT',
+				headers: {
+					...(await bearer(player)),
+					'Content-Type': 'application/x-www-form-urlencoded',
+				},
+				body: new URLSearchParams({ inProgress: 'True' }).toString(),
+			})
+			expect(res.status).toBe(200)
+		}
+
+		// Supports join-in-progress: the running game is joined, and the response says so.
+		const a = await spawn(88, '8801')
+		expect(a.isInProgress).toBe(false)
+		await startGame(a.roomInstanceId, '8801')
+		const joined = await spawn(88, '8802')
+		expect(joined.roomInstanceId).toBe(a.roomInstanceId)
+		expect(joined.isInProgress).toBe(true)
+
+		// A waiting lobby still fills before anyone is put mid-game.
+		await env.DB.prepare(
+			`UPDATE room_instance SET data = json_set(data, '$.matchmakingPolicy', 2) WHERE id = ?1`
+		)
+			.bind(a.roomInstanceId)
+			.run()
+		const lobby = await spawn(88, '8803')
+		expect(lobby.roomInstanceId).not.toBe(a.roomInstanceId)
+		await env.DB.prepare(
+			`UPDATE room_instance SET data = json_set(data, '$.matchmakingPolicy', 0) WHERE id = ?1`
+		)
+			.bind(a.roomInstanceId)
+			.run()
+		expect((await spawn(88, '8804')).roomInstanceId).toBe(lobby.roomInstanceId)
+
+		// No flag on the subroom: an in-progress instance is skipped and a fresh one opened.
+		const b = await spawn(89, '8811')
+		await startGame(b.roomInstanceId, '8811')
+		const fresh = await spawn(89, '8812')
+		expect(fresh.roomInstanceId).not.toBe(b.roomInstanceId)
+		expect(fresh.isInProgress).toBe(false)
 	})
 
 	test('POST /roominstance/:id/markprivate closes the instance, owner-only', async () => {
