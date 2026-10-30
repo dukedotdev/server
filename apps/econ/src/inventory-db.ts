@@ -57,10 +57,10 @@ export interface AvatarItemV4 {
 }
 
 /**
- * Project a stored or bundled avatar item into the v4 DTO. Neither source carries an
- * `AvatarItemId`, a `TagList` or an `IsBaseAvatarItem` flag — the storefront gift-drops
- * we grant from have none and the default catalog has none either — so those default to
- * 0 / "" / false rather than being invented.
+ * Project a stored or bundled avatar item into the v4 DTO. The storefront gift-drops
+ * we grant from carry no `AvatarItemId`, `TagList` or `IsBaseAvatarItem` flag, and the
+ * default catalog's `TagList` is null, so missing values default to 0 / "" / false rather
+ * than being invented.
  */
 export function toAvatarItemV4(item: Record<string, unknown>): AvatarItemV4 {
 	const str = (v: unknown): string => (typeof v === 'string' ? v : '')

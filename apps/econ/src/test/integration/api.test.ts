@@ -475,9 +475,8 @@ describe('econ endpoints', () => {
 		}
 		expect(typeof body[0]?.avatarItemDesc).toBe('string')
 		expect(typeof body[0]?.friendlyName).toBe('string')
-		// The catalog carries no ids, tags or base flag — those default rather than
-		// being invented.
-		expect(body[0]?.avatarItemId).toBe(0)
+		// The catalog's ids come through; its null TagList defaults to "".
+		expect(body[0]?.avatarItemId).toBe(6)
 		expect(body[0]?.tagList).toBe('')
 		expect(body[0]?.isBaseAvatarItem).toBe(false)
 	})

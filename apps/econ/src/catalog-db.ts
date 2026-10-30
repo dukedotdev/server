@@ -148,10 +148,9 @@ export interface CatalogRow {
 }
 
 /**
- * The catalog's view of an avatar item — the bundled `default-avatar-items.json` record plus
- * the four fields that file leaves out (`AvatarItemId`, `IsBaseAvatarItem`, `CreatedAt`,
- * `ThumbnailImage`), which is what `GET /api/avatar/v1/defaultunlocked` serves and what the
- * store rows resolve against.
+ * The catalog's view of an avatar item — the shape of a `default-avatar-items.json` record
+ * (which `GET /api/avatar/v1/defaultunlocked` serves verbatim) and what the store rows
+ * resolve against.
  *
  * `AvatarItemId` is nullable and `Tooltip` may be null; both are true of the captured data and
  * the client reads them that way. Do not tighten either to keep a projection simple.
