@@ -524,7 +524,7 @@ export const SLIDESHOW_LIMIT = 10
 export const SLIDESHOW_MAX_LIMIT = 100
 
 /** The slideshow ranks photos taken in this many days by cheers. */
-export const SLIDESHOW_DAYS = 14
+export const SLIDESHOW_DAYS = 7
 
 /** The slideshow projection of an image — creator username + room name joined in. */
 export interface SlideshowImage {

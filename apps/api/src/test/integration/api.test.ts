@@ -7425,10 +7425,10 @@ describe('images', () => {
 		expect(await feed('?take=lots')).toBe(10)
 	})
 
-	// The last 14 days' most-cheered photos lead; older ones (newest first) follow so a
+	// The last 7 days' most-cheered photos lead; older ones (newest first) follow so a
 	// quiet stretch still fills the stage — for the game's slideshow and the website's hero
 	// alike.
-	test('GET /api/images/v1/slideshow ranks 14 days by cheers, then tops up', async () => {
+	test('GET /api/images/v1/slideshow ranks 7 days by cheers, then tops up', async () => {
 		// Other tests' photos share this table; start from an empty one so the order is ours.
 		await env.DB.prepare('DELETE FROM image').run()
 		const day = 24 * 60 * 60 * 1000
@@ -7442,8 +7442,8 @@ describe('images', () => {
 			return img.Id
 		}
 		const oldest = await seed('cheeroldest.jpg', 40, 5)
-		const old = await seed('cheerold.jpg', 30, 99) // outside the window, however cheered
-		const mid = await seed('cheermid.jpg', 10, 3) // past a week, inside 14 days
+		const old = await seed('cheerold.jpg', 10, 99) // outside the window, however cheered
+		const mid = await seed('cheermid.jpg', 6, 3) // older than the top photo, inside 7 days
 		const low = await seed('cheerlow.jpg', 2, 1)
 		const top = await seed('cheertop.jpg', 5, 8)
 		const none = await seed('cheernone.jpg', 1, 0)
