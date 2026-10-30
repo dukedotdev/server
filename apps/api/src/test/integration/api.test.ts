@@ -2392,11 +2392,10 @@ describe('public endpoints', () => {
 			'2026-07-12/x.inv'
 		)
 		expect(saved.CreationRoomId).toBe(73)
-		// Fully permissioned from the start (the client's creatorAccountRole is a room
-		// role, not an invention permission, so it's ignored); publishing is what
-		// narrows GeneralPermission down.
+		// The creator gets Unlimited (the client's creatorAccountRole is a room role, not
+		// an invention permission, so it's ignored); everyone else starts at UseOnly.
 		expect(saved.CreatorPermission).toBe(100)
-		expect(saved.GeneralPermission).toBe(100)
+		expect(saved.GeneralPermission).toBe(20)
 		expect(saved.AllowTrial).toBe(true)
 		// Freshly saved → private/unpublished until the player publishes it.
 		expect(saved.IsPublished).toBe(false)

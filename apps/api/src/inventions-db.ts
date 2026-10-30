@@ -490,9 +490,9 @@ export interface NewInvention {
  * invention is private/unpublished — it shows up only in the creator's own list
  * until they publish it, so Accessibility/IsPublished/FirstPublishedAt reflect that.
  *
- * It is, however, fully permissioned from the start: the creator gets Unlimited over
- * their own invention, and so does everyone else once it's published — publishing is
- * what narrows `GeneralPermission` down (to UseOnly by default). Trials are allowed.
+ * The creator gets Unlimited over their own invention; everyone else starts at UseOnly
+ * (`GeneralPermission` 20), which `v3/publish` and `v2/update` can then change. Trials
+ * are allowed.
  * The client's `creatorAccountRole` is ignored: it's the player's role in the room
  * they built it in, not a permission over the invention.
  *
@@ -545,7 +545,7 @@ export async function createInvention(
 		NumDownloads: 0,
 		CheerCount: 0,
 		CreatorPermission: INVENTION_PERMISSION.unlimited,
-		GeneralPermission: INVENTION_PERMISSION.unlimited,
+		GeneralPermission: INVENTION_PERMISSION.useonly,
 		IsAGInvention: false,
 		IsCertifiedInvention: false,
 		Price: 0,
