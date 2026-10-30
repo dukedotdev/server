@@ -2085,6 +2085,45 @@ describe('auth-gated endpoints', () => {
 		})
 	})
 
+	// The dorm a player picks (`rooms` `PUT /dormroom/me`, stored in their settings map)
+	// REPLACES their provisioned one — including where `/matchmake/dorm` sends them.
+	test('POST /matchmake/dorm enters the dorm the player picked', async () => {
+		const dorm = async () =>
+			(
+				(await (
+					await exports.default.fetch(`${ORIGIN}/matchmake/dorm`, {
+						method: 'POST',
+						headers: await bearer('8950'),
+					})
+				).json()) as { roomInstance: { roomId: number; name: string } }
+			).roomInstance
+		const provisioned = (await dorm()).roomId
+
+		await seedRoomWithSubRooms(env.DB, {
+			RoomId: 97_100,
+			Name: 'PickedCustomDorm',
+			IsDorm: true,
+			CreatorAccountId: 8950,
+			Roles: [{ AccountId: 8950, Role: 255 }],
+			SubRooms: [{ SubRoomId: 97_100, UnitySceneId: RECCENTER_SCENE, MaxPlayers: 4 }],
+		} as unknown as Record<string, unknown>)
+		const pick = (roomId: number) =>
+			env.RECFLARE_PLAYER_SETTINGS.put(
+				'player:8950',
+				JSON.stringify({ DormRoomId: String(roomId) })
+			)
+
+		await pick(97_100)
+		expect((await dorm()).roomId).toBe(97_100)
+
+		// A pick that is no longer theirs falls back to the provisioned dorm.
+		await env.DB.prepare(
+			`UPDATE room SET data = json_set(data, '$.CreatorAccountId', 8951, '$.Roles', json('[]'))
+			 WHERE room_id = 97100`
+		).run()
+		expect((await dorm()).roomId).toBe(provisioned)
+	})
+
 	test('POST /matchmake/dorm gives each client build its own dorm instance', async () => {
 		const dorm = async (version: string) =>
 			(await (
@@ -3082,9 +3121,11 @@ describe('auth-gated endpoints', () => {
 				method: 'POST',
 				headers: await bearer(player),
 			})
-			return ((await res.json()) as {
-				roomInstance: { roomInstanceId: number; isInProgress: boolean }
-			}).roomInstance
+			return (
+				(await res.json()) as {
+					roomInstance: { roomInstanceId: number; isInProgress: boolean }
+				}
+			).roomInstance
 		}
 		const startGame = async (instanceId: number, player: string) => {
 			const res = await exports.default.fetch(`${ORIGIN}/roominstance/${instanceId}/inprogress`, {

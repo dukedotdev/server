@@ -26,6 +26,12 @@ export type Env = SharedHonoEnv & {
 	 */
 	RECFLARE_NOTIFICATIONS_HUB: DurableObjectNamespace<NotificationsHub>
 	/**
+	 * The per-player settings map the `playersettings` worker owns (`player:<id>` → JSON
+	 * `{ key: value }`). Read-only here: the staff dorm clear reads the dorm the player picked
+	 * through `rooms` `PUT /dormroom/me`, which is the one it clears.
+	 */
+	RECFLARE_PLAYER_SETTINGS: KVNamespace
+	/**
 	 * Which ban-EVASION arms the operator enforces — the same knob `match` and `auth`
 	 * read, parsed by the same `banEvasionMatch` (in `api`'s bans-db, which owns the
 	 * policy). www reads it so the staff panel's "who else would this ban reach" preview

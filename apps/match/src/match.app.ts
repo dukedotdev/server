@@ -23,7 +23,7 @@ import {
 	getJoinableInstance,
 	getLatestRoomInviteBetween,
 	getMostActiveClubhouses,
-	getOrCreateDormRoom,
+	getPlayerDormRoom,
 	getPresence,
 	getPresences,
 	getRoomById,
@@ -1727,7 +1727,8 @@ async function matchmakeIntoRoom(c: Context<App>) {
 }
 
 /**
- * The authed player's personal dorm instance. Gets-or-creates their dorm room, then backs
+ * The authed player's personal dorm instance. Resolves their dorm room — the one they picked
+ * through `rooms` `PUT /dormroom/me`, else their provisioned one, created on first access — then backs
  * it with a private `room_instance` carrying its own Photon room id (dorms are isolated
  * from each other). The room's current scene/saved data is re-read each time, so edits
  * show up on the next visit — what persists about a dorm is the ROOM and the scene saved
@@ -1744,7 +1745,8 @@ async function matchmakeIntoRoom(c: Context<App>) {
  * empty past the grace window, and they simply get a fresh one on the next visit.
  */
 async function playerDormInstance(c: Context<App>, accountId: number): Promise<RoomInstance> {
-	const room = await getOrCreateDormRoom(c.env.DB, accountId)
+	// The dorm the player picked (`rooms` `PUT /dormroom/me`) replaces their provisioned one.
+	const room = await getPlayerDormRoom(c.env.DB, c.env.RECFLARE_PLAYER_SETTINGS, accountId)
 	const f = instanceFieldsFromRoom(room)
 	const gameVersion = await callerGameVersion(c)
 	// Reuse this build's dorm instance (private, so getJoinableInstance won't find it).

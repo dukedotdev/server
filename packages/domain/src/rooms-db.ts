@@ -20,6 +20,7 @@
 import { escapeLike, prefixUpperBound } from './accounts-db'
 import { chunkForBinds, MAX_BOUND_PARAMS } from './d1-binds'
 import { Accessibility, Role } from './enums'
+import { readPlayerSettings } from './player-settings-kv'
 import { countPlayersByRoom } from './presence-db'
 import { resyncInstanceCapacity } from './room-instance-db'
 import { isStudioBundleFilename } from './studio-unity-assets'
@@ -859,6 +860,9 @@ export async function setPlayerData(
  * owner tags the clone from scratch. `IsRRO` is cleared so the client doesn't render a
  * virtual "RRO" tag on it, `IsDeveloperOwned`/`CloningAllowed` are cleared, its `Stats`
  * start at zero, and it starts PRIVATE rather than inheriting the source's visibility.
+ * `IsDorm` carries over: the 2026 client makes custom dorms by cloning one. The player's
+ * own dorm stays their OLDEST dorm (see {@link getDormRoom}), so a cloned one never
+ * replaces it.
  * Returns the new room, or null when the source isn't in D1 or disallows cloning.
  */
 export async function cloneRoom(
@@ -901,7 +905,8 @@ export async function cloneRoom(
 		RoomId: newRoomId,
 		Name: name,
 		CreatorAccountId: accountId,
-		IsDorm: false,
+		// Kept: a clone of a dorm is a custom dorm (see above).
+		IsDorm: source.IsDorm === true,
 		// Start fresh, except for the system tags the scene needs to run (see below).
 		Tags: systemTags,
 		// A user clone is not a Rec Room Original — clear the inherited flag, or the
@@ -3321,16 +3326,19 @@ export async function getRoomsByCreator(db: D1Database, accountId: number): Prom
 }
 
 /**
- * How many rooms an account has made, for the per-account room cap. Dorms don't
- * count: every player gets one auto-provisioned, so counting it would silently cost
- * them a slot they never asked for.
+ * How many rooms an account has made, for the per-account room cap. The player's own
+ * dorm (their oldest, see {@link getDormRoom}) doesn't count: every player gets one
+ * auto-provisioned, so counting it would silently cost them a slot they never asked for.
+ * Custom dorms cloned after it DO count, or cloning dorms would get around the cap.
  */
 export async function countRoomsByCreator(db: D1Database, accountId: number): Promise<number> {
 	const row = await db
 		.prepare(
 			`SELECT COUNT(*) AS n FROM room
 			 WHERE creator_account_id = ?1
-			   AND COALESCE(is_dorm, 0) = 0`
+			   AND room_id <> COALESCE(
+			     (SELECT MIN(room_id) FROM room WHERE creator_account_id = ?1 AND is_dorm = 1), -1
+			   )`
 		)
 		.bind(accountId)
 		.first<{ n: number }>()
@@ -3350,9 +3358,10 @@ export async function countRoomsByCreator(db: D1Database, accountId: number): Pr
  * behind it showed nothing at all. Repeating `createdby/me` is the better failure, and
  * overlap is what a client that renders one list wants anyway.
  *
- * The dorm stays out, on `ownedby/me`'s reasoning: it is auto-provisioned rather than a
- * room the player made. A room matching BOTH halves appears once — the roles half is an
- * EXISTS, not a join.
+ * Dorms stay out unless `includeDorms` is set. `contributedby/me` sets it: the 2026 client
+ * lists a player's dorms there — the provisioned one and any custom dorm cloned from a
+ * dorm — while `ownedby/me` leaves them out. A room matching BOTH halves appears once — the
+ * roles half is an EXISTS, not a join.
  *
  * A PENDING invite is not a job. An invited account holds a `Roles` entry with `Role` 0 and
  * the offer on `InvitedRole` until it answers, and that entry is indexed like any other —
@@ -3367,16 +3376,21 @@ export async function countRoomsByCreator(db: D1Database, accountId: number): Pr
  * the OR as a multi-index union. A room with no `Roles` has no `room_role` rows, so it
  * only reaches the list if the account created it.
  */
-export async function getContributedRooms(db: D1Database, accountId: number): Promise<Room[]> {
+export async function getContributedRooms(
+	db: D1Database,
+	accountId: number,
+	{ includeDorms = false }: { includeDorms?: boolean } = {}
+): Promise<Room[]> {
 	const { results } = await db
 		.prepare(
 			`SELECT ${ROOM_COLUMNS} FROM room
-			 WHERE creator_account_id = ?1
-			    OR room_id IN (SELECT room_id FROM room_role WHERE account_id = ?1 AND role <> ?2)`
+			 WHERE (creator_account_id = ?1
+			    OR room_id IN (SELECT room_id FROM room_role WHERE account_id = ?1 AND role <> ?2))
+			   AND (?3 OR is_dorm IS NOT 1)`
 		)
-		.bind(accountId, Role.None)
+		.bind(accountId, Role.None, includeDorms ? 1 : 0)
 		.all<RoomRow>()
-	return (await hydrateRooms(db, parseAll(results))).filter((r) => r.IsDorm !== true)
+	return hydrateRooms(db, parseAll(results))
 }
 
 /**
@@ -4265,14 +4279,20 @@ export async function getUsername(db: D1Database, accountId: number): Promise<st
 	return typeof account.username === 'string' ? account.username : null
 }
 
-/** A player's personal dorm room (owned by them, IsDorm), or null if none yet. */
+/**
+ * A player's personal dorm room (owned by them, IsDorm), or null if none yet. A player can
+ * own several dorms (cloning one keeps `IsDorm`), so this is the OLDEST — the one
+ * provisioned for them — never a custom dorm cloned later.
+ */
 export async function getDormRoom(db: D1Database, accountId: number): Promise<Room | null> {
 	return hydrateRoom(
 		db,
 		parseOne(
 			await db
 				.prepare(
-					`SELECT ${ROOM_COLUMNS} FROM room WHERE creator_account_id = ?1 AND is_dorm = 1 LIMIT 1`
+					`SELECT ${ROOM_COLUMNS} FROM room
+					 WHERE creator_account_id = ?1 AND is_dorm = 1
+					 ORDER BY room_id LIMIT 1`
 				)
 				.bind(accountId)
 				.first<RoomRow>()
@@ -4290,18 +4310,29 @@ export async function getDormRoom(db: D1Database, accountId: number): Promise<Ro
  * Dorms always publish, so the newest save is the one `CurrentSave` serves, and the new save
  * goes live the same way — `current_save_id`, with any staged save dropped.
  *
+ * The dorm cleared is the one the player plays in: the dorm they picked through `rooms`
+ * `PUT /dormroom/me` while it is still theirs (see {@link getPickedDormRoom}), otherwise their
+ * provisioned (oldest) dorm. Nothing is provisioned here.
+ *
  * Null when the player has no dorm. `previousSaveId` is the newest save beforehand (null when
  * the dorm has never been saved); `saveId` is the blank save made here, null when there was
  * no blob to clear and so nothing was written.
  */
 export async function clearDormSaveBlob(
 	db: D1Database,
+	settings: KVNamespace,
 	accountId: number
 ): Promise<{ roomId: number; previousSaveId: number | null; saveId: number | null } | null> {
-	const dorm = await db
-		.prepare('SELECT room_id FROM room WHERE creator_account_id = ?1 AND is_dorm = 1 LIMIT 1')
-		.bind(accountId)
-		.first<{ room_id: number }>()
+	const picked = await getPickedDormRoom(db, settings, accountId)
+	const dorm = picked
+		? { room_id: Number(picked.RoomId) }
+		: await db
+				.prepare(
+					// The oldest dorm, as `getDormRoom` picks it — not a custom dorm cloned later.
+					'SELECT room_id FROM room WHERE creator_account_id = ?1 AND is_dorm = 1 ORDER BY room_id LIMIT 1'
+				)
+				.bind(accountId)
+				.first<{ room_id: number }>()
 	if (!dorm) return null
 
 	const latest = await db
@@ -4347,6 +4378,48 @@ export async function clearDormSaveBlob(
  * NOTE: this is the one place the match worker writes to the rooms table (the
  * `rooms` worker otherwise owns the schema).
  */
+/** The player-settings key holding the dorm the player picked (`rooms` `PUT /dormroom/me`). */
+export const DORM_ROOM_SETTING_KEY = 'DormRoomId'
+
+/**
+ * Whether the player may call this room their dorm: it is a dorm (`IsDorm` — the provisioned
+ * one or a custom dorm cloned from one) and they created or co-own it.
+ */
+export function isPickableDorm(room: Room | null, accountId: number): room is Room {
+	return room !== null && room.IsDorm === true && canManageRoom(room, accountId)
+}
+
+/**
+ * The dorm the player picked through `rooms` `PUT /dormroom/me`, while it is still a dorm
+ * they run. Null when they never picked one, or the pick went stale (the room was deleted,
+ * or they lost their role on it), or KV is unreachable — every caller has a fallback.
+ */
+export async function getPickedDormRoom(
+	db: D1Database,
+	settings: KVNamespace,
+	accountId: number
+): Promise<Room | null> {
+	const stored = await readPlayerSettings(settings, accountId).catch(() => null)
+	const picked = Number.parseInt(stored?.[DORM_ROOM_SETTING_KEY] ?? '', 10)
+	if (Number.isNaN(picked)) return null
+	const room = await getRoomById(db, picked)
+	return isPickableDorm(room, accountId) ? room : null
+}
+
+/**
+ * The player's dorm as everything else sees it — `rooms` `GET /dormroom/me`, `match`
+ * `/matchmake/dorm`, and the staff dorm clear alike. The dorm they picked REPLACES their
+ * provisioned one (see {@link getPickedDormRoom}); otherwise it is the provisioned dorm,
+ * created here on first access, so the player always has a dorm to go to.
+ */
+export async function getPlayerDormRoom(
+	db: D1Database,
+	settings: KVNamespace,
+	accountId: number
+): Promise<Room> {
+	return (await getPickedDormRoom(db, settings, accountId)) ?? getOrCreateDormRoom(db, accountId)
+}
+
 export async function getOrCreateDormRoom(db: D1Database, accountId: number): Promise<Room> {
 	const existing = await getDormRoom(db, accountId)
 	if (existing) return existing

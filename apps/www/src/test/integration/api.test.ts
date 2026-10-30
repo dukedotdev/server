@@ -2549,6 +2549,40 @@ it('clears a player’s dorm by publishing an empty save over the newest one', a
 	])
 })
 
+// A picked dorm (`rooms` `PUT /dormroom/me`) replaces the provisioned one, so it is the one
+// the player loads into — and the one a clear has to blank.
+it('clears the dorm the player picked, not their provisioned one', async () => {
+	const provisioned = Number((await getOrCreateDormRoom(env.DB, 8341)).RoomId)
+	const picked = 97_200
+	await env.DB.prepare('INSERT INTO room (data) VALUES (?1)')
+		.bind(
+			JSON.stringify({
+				RoomId: picked,
+				Name: 'ClearPickedDorm',
+				CreatorAccountId: 8341,
+				IsDorm: true,
+				Roles: [{ AccountId: 8341, Role: 255 }],
+			})
+		)
+		.run()
+	const clear = async () =>
+		(
+			(await (await staffPost('/api/staff/players/8341/clear-dorm', 8110, {})).json()) as {
+				roomId: number
+			}
+		).roomId
+
+	await env.RECFLARE_PLAYER_SETTINGS.put(
+		'player:8341',
+		JSON.stringify({ DormRoomId: String(picked) })
+	)
+	expect(await clear()).toBe(picked)
+
+	// A pick that is no longer a dorm they run falls back to the provisioned dorm.
+	await env.DB.prepare('DELETE FROM room WHERE room_id = ?1').bind(picked).run()
+	expect(await clear()).toBe(provisioned)
+})
+
 it('clears every instance of a room, for any staff member', async () => {
 	const make = (roomId: number, photonRoomId: string) =>
 		createRoomInstance(env.DB, { ownerAccountId: 8110, roomId, photonRoomId })

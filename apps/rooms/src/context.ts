@@ -20,6 +20,10 @@ export type Env = SharedHonoEnv & {
 	// images/files live here under the `room/` key prefix; bound so deleting a room
 	// can remove its image object.
 	CDN_ASSETS: R2Bucket
+	// The per-player settings map the `playersettings` worker owns (`player:<id>` → JSON
+	// `{ key: value }`). Holds the dorm the player picked through `PUT /dormroom/me`; every
+	// write MERGES into the map, since it carries every other setting the player has.
+	RECFLARE_PLAYER_SETTINGS: KVNamespace
 	// How many rooms one account may create (optional). Unset falls back to
 	// DEFAULT_MAX_ROOMS_PER_ACCOUNT in rooms.app.ts; 0 lifts the cap. Typed
 	// `string | number` because a var declared in wrangler.jsonc `vars` arrives as a

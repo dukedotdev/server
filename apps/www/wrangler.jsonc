@@ -40,6 +40,14 @@
 	// `/privacy` is here for the same reason `/docs` is, and it matters more: the Meta
 	// Horizon Store re-fetches the privacy policy URL to confirm it's live, and dropping
 	// it from this list would serve that fetch the SPA shell instead of the policy.
+	// The per-player settings map the `playersettings` worker owns. Read by the staff dorm
+	// clear, for the dorm the player picked through `rooms` `PUT /dormroom/me`.
+	"kv_namespaces": [
+		{
+			"binding": "RECFLARE_PLAYER_SETTINGS",
+			"id": "local"
+		}
+	],
 	"assets": {
 		"binding": "ASSETS",
 		"not_found_handling": "single-page-application",

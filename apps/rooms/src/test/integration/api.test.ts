@@ -397,6 +397,101 @@ describe('rooms endpoints', () => {
 		expect(again).toBe(fresh)
 	})
 
+	// The 2026 client picks between a player's dorms (custom dorms are clones of a dorm) and
+	// expects `GET /dormroom/me` to answer the pick from then on.
+	it('PUT /dormroom/me picks the caller’s dorm, and GET serves it', async () => {
+		const put = async (roomId: string | undefined, sub = '878') =>
+			SELF.fetch(`${ORIGIN}/dormroom/me`, {
+				method: 'PUT',
+				headers: {
+					...(await bearer(sub)),
+					'Content-Type': 'application/x-www-form-urlencoded',
+				},
+				body: roomId === undefined ? '' : new URLSearchParams({ roomId }).toString(),
+			})
+		const get = async () =>
+			(await (
+				await SELF.fetch(`${ORIGIN}/dormroom/me`, { headers: await bearer('878') })
+			).json()) as number
+
+		const provisioned = await get()
+		const seed = async (room: Record<string, unknown>) =>
+			env.DB.prepare('INSERT INTO room (data) VALUES (?1)').bind(JSON.stringify(room)).run()
+		await seed({
+			RoomId: 30591,
+			Name: 'PickCustomDorm',
+			CreatorAccountId: 878,
+			IsDorm: true,
+			SubRooms: [],
+			Roles: [{ AccountId: 878, Role: 255 }],
+		})
+		await seed({
+			RoomId: 30592,
+			Name: 'PickNotADorm',
+			CreatorAccountId: 878,
+			SubRooms: [],
+			Roles: [{ AccountId: 878, Role: 255 }],
+		})
+		await seed({
+			RoomId: 30593,
+			Name: 'PickSomeoneElsesDorm',
+			CreatorAccountId: 879,
+			IsDorm: true,
+			SubRooms: [],
+			Roles: [{ AccountId: 879, Role: 255 }],
+		})
+
+		// No token → 401, and nothing stored.
+		expect((await SELF.fetch(`${ORIGIN}/dormroom/me`, { method: 'PUT' })).status).toBe(401)
+
+		// The reply is the picked id in the PascalCase envelope (the GET still answers a bare
+		// number), and the GET serves it from then on.
+		const ok = await put('30591')
+		expect(ok.status).toBe(200)
+		expect(await ok.json()).toEqual({ Value: 30591, Success: true, Error: null, error_id: null })
+		expect(await get()).toBe(30591)
+
+		// Refusals are the same envelope, and leave the pick alone.
+		const refused = await put('30592')
+		expect(refused.status).toBe(403)
+		expect(await refused.json()).toEqual({
+			Value: null,
+			Success: false,
+			Error: expect.any(String),
+			error_id: null,
+		})
+		expect((await put(undefined)).status).toBe(400)
+		expect((await put('abc')).status).toBe(400)
+		expect((await put('99999999')).status).toBe(404)
+		expect((await put('30592')).status).toBe(403)
+		expect((await put('30593')).status).toBe(403)
+		expect(await get()).toBe(30591)
+
+		// The pick MERGES into the settings map — the player's other settings survive it.
+		await env.RECFLARE_PLAYER_SETTINGS.put(
+			'player:878',
+			JSON.stringify({
+				...(await env.RECFLARE_PLAYER_SETTINGS.get<Record<string, string>>('player:878', 'json')),
+				Other: '1',
+			})
+		)
+		expect((await put(String(provisioned))).status).toBe(200)
+		expect(await env.RECFLARE_PLAYER_SETTINGS.get('player:878', 'json')).toEqual({
+			DormRoomId: String(provisioned),
+			Other: '1',
+		})
+		expect(await get()).toBe(provisioned)
+
+		// A pick that went stale (the room is gone) falls back to the provisioned dorm.
+		expect((await put('30591')).status).toBe(200)
+		await env.DB.prepare('DELETE FROM room WHERE room_id = 30591').run()
+		expect(await get()).toBe(provisioned)
+
+		// Room ids are MAX + 1, so leaving these high ids behind would shift the ids every
+		// later test's rooms get.
+		await env.DB.prepare('DELETE FROM room WHERE room_id IN (30592, 30593)').run()
+	})
+
 	// The website's "My rooms" list is a browser calling this worker from another origin,
 	// so a response without CORS headers is one the browser throws away — and the page
 	// can't tell that apart from the server being down. Pinned on the preflight too: the
@@ -520,13 +615,23 @@ describe('rooms endpoints', () => {
 			Accessibility: 1,
 			SubRooms: [],
 		})
-		// ...and their dorm, which stays out: auto-provisioned, not a room they made.
+		// ...and their provisioned dorm, listed under "contributed" but not "owned".
 		await seed({
 			RoomId: 30407,
 			Name: "@player820's Dorm",
 			CreatorAccountId: 820,
 			IsDorm: true,
 			Accessibility: 2,
+			SubRooms: [],
+			Roles: [{ AccountId: 820, Role: 255 }],
+		})
+		// ...and a CUSTOM dorm, cloned after it: listed the same way.
+		await seed({
+			RoomId: 30409,
+			Name: 'ContribCustomDorm',
+			CreatorAccountId: 820,
+			IsDorm: true,
+			Accessibility: 0,
 			SubRooms: [],
 			Roles: [{ AccountId: 820, Role: 255 }],
 		})
@@ -563,10 +668,11 @@ describe('rooms endpoints', () => {
 		const rooms = (await res.json()) as Array<{ RoomId: number; Name: string }>
 		// A bare array of the canonical room DTO — no envelope, no paging wrapper.
 		expect(Array.isArray(rooms)).toBe(true)
-		expect(rooms.map((r) => r.RoomId).sort((a, b) => a - b)).toEqual([30401, 30402, 30403, 30406])
+		expect(rooms.map((r) => r.RoomId).sort((a, b) => a - b)).toEqual([
+			30401, 30402, 30403, 30406, 30407, 30409,
+		])
 		// Their own rooms are IN — the list overlaps createdby/me rather than coming back
-		// empty for someone who only ever built their own — but the dorm is not.
-		expect(rooms.some((r) => r.RoomId === 30407)).toBe(false)
+		// empty for someone who only ever built their own — and so are both dorms.
 		expect(rooms[0]).toMatchObject({ Name: expect.any(String), Accessibility: expect.any(Number) })
 
 		// The unanswered invite lists the room for NOBODY: not under "contributed" (above),
@@ -575,6 +681,9 @@ describe('rooms endpoints', () => {
 		const ownedIds = ((await owned.json()) as Array<{ RoomId: number }>).map((r) => r.RoomId)
 		expect(ownedIds).toContain(30401)
 		expect(ownedIds).not.toContain(30408)
+		// Neither dorm is "owned": dorms are listed under "contributed" only.
+		expect(ownedIds).not.toContain(30407)
+		expect(ownedIds).not.toContain(30409)
 
 		// Nor is the invited player part of the room as served: the room DTO carries only HELD
 		// roles. `GET /rooms/:id/roles` DOES list the invite — the client shows pending invites
@@ -1725,6 +1834,57 @@ describe('rooms endpoints', () => {
 			// 0 lifts the cap entirely.
 			env.MAX_ROOMS_PER_ACCOUNT = 0
 			expect(await clone('Uncapped')).toMatchObject({ success: true })
+		} finally {
+			env.MAX_ROOMS_PER_ACCOUNT = original
+		}
+	})
+
+	// The 2026 client makes custom dorms by cloning one, so the clone stays a dorm. The
+	// player's own dorm is still their OLDEST, and the custom one counts against the cap.
+	it('POST /rooms/:id/clone of a dorm keeps IsDorm without replacing the player’s dorm', async () => {
+		const headers = {
+			...(await bearer('877')),
+			'Content-Type': 'application/x-www-form-urlencoded',
+		}
+		const dormId = (await (
+			await SELF.fetch(`${ORIGIN}/dormroom/me`, { headers: await bearer('877') })
+		).json()) as number
+		// A provisioned dorm inherits the template's CloningAllowed; open it up explicitly.
+		await env.DB.prepare(
+			`UPDATE room SET data = json_set(data, '$.CloningAllowed', json('true')) WHERE room_id = ?1`
+		)
+			.bind(dormId)
+			.run()
+
+		const original = env.MAX_ROOMS_PER_ACCOUNT
+		try {
+			env.MAX_ROOMS_PER_ACCOUNT = 1
+			const res = await SELF.fetch(`${ORIGIN}/rooms/${dormId}/clone`, {
+				method: 'POST',
+				headers,
+				body: new URLSearchParams({ name: 'MyCustomDorm' }).toString(),
+			})
+			const cloned = (await res.json()) as {
+				success: boolean
+				value: { RoomId: number; IsDorm: boolean } | null
+			}
+			expect(cloned).toMatchObject({ success: true })
+			expect(cloned.value!.IsDorm).toBe(true)
+			expect(cloned.value!.RoomId).not.toBe(dormId)
+
+			// Their dorm is still the one provisioned for them, not the clone.
+			const dormAfter = (await (
+				await SELF.fetch(`${ORIGIN}/dormroom/me`, { headers: await bearer('877') })
+			).json()) as number
+			expect(dormAfter).toBe(dormId)
+
+			// The provisioned dorm is free; the custom one used the only slot.
+			const capped = await SELF.fetch(`${ORIGIN}/rooms/${dormId}/clone`, {
+				method: 'POST',
+				headers,
+				body: new URLSearchParams({ name: 'MyCustomDormTwo' }).toString(),
+			})
+			expect(await capped.json()).toMatchObject({ success: false, value: null })
 		} finally {
 			env.MAX_ROOMS_PER_ACCOUNT = original
 		}
@@ -6324,6 +6484,7 @@ describe('rooms endpoints', () => {
 			'POST /rooms/{roomId}/subrooms/{subRoomId}/move',
 			'POST /rooms/{roomId}/subrooms/{subRoomId}/publish_save',
 			'POST /unity_assets/baked/bulk',
+			'PUT /dormroom/me',
 			'PUT /rooms/{roomId}/accessibility',
 			'PUT /rooms/{roomId}/cloning',
 			'PUT /rooms/{roomId}/creator',

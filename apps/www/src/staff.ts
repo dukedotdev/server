@@ -1592,7 +1592,8 @@ export async function clearPasswordHandler(c: Context<App>) {
 }
 
 /**
- * Blank the scene on a player's dorm, for a player going back to the 2023 client: a dorm
+ * Blank the scene on a player's dorm — the one they picked through `rooms`
+ * `PUT /dormroom/me`, else their provisioned one — for a player going back to the 2023 client: a dorm
  * saved by a newer one won't load there. It publishes a new, empty save rather than erasing
  * anything, so `previousSaveId` is the save to restore if they want the old dorm back.
  * `saveId` is null when there was nothing to clear, which writes nothing and is still
@@ -1602,7 +1603,7 @@ export async function clearDormHandler(c: Context<App>) {
 	const playerId = playerIdParam(c)
 	if (playerId === null) return c.json({ error: 'A numeric player id is required' }, 400)
 
-	const cleared = await clearDormSaveBlob(c.env.DB, playerId)
+	const cleared = await clearDormSaveBlob(c.env.DB, c.env.RECFLARE_PLAYER_SETTINGS, playerId)
 	if (cleared === null) return c.json({ error: 'That player has no dorm' }, 404)
 
 	await recordPlayerAudit(c, 'clear_dorm', { playerId, ...cleared })

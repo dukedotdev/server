@@ -434,6 +434,23 @@ export const ExperienceRequest = z.object({
  */
 export const DormRoomId = z.int().describe('The caller’s dorm RoomId')
 
+/**
+ * `PUT /dormroom/me`'s reply: the picked id in the PascalCase `{ Value, Success, Error,
+ * error_id }` envelope — `error_id` lowercase among its siblings. NOT the bare number the GET
+ * answers. A refusal is the same envelope with `Value` null and the reason in `Error`.
+ */
+export const DormRoomResult = z.object({
+	Value: z.int().nullable().describe('The picked dorm RoomId; null on a refusal'),
+	Success: z.boolean(),
+	Error: z.string().nullable().describe('Null on success; the reason on a refusal'),
+	error_id: z.string().nullable().describe('Null. Lowercase, unlike its siblings'),
+})
+
+/** `PUT /dormroom/me` — the dorm the caller picks as theirs. */
+export const DormRoomRequest = z.object({
+	roomId: z.string().describe('A dorm (`IsDorm`) the caller created or co-owns, as an integer'),
+})
+
 /** `GET /rooms/{roomId}/boosts/{playerId}/count` — a bare integer, no envelope. */
 export const RoomBoostCount = z
 	.int()

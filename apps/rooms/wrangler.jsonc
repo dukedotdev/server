@@ -22,6 +22,14 @@
 	// Shared `recflare-cdn` R2 bucket (also bound by the `cdn`/`storage` workers).
 	// Room images/files live here under `room/`; bound so deleting a room removes its
 	// image object. bucket_name is a literal, so nothing is spliced at deploy time.
+	// The per-player settings map the `playersettings` worker owns. Holds the dorm the
+	// player picked through `PUT /dormroom/me`.
+	"kv_namespaces": [
+		{
+			"binding": "RECFLARE_PLAYER_SETTINGS",
+			"id": "local"
+		}
+	],
 	"r2_buckets": [
 		{
 			"binding": "CDN_ASSETS",

@@ -22,6 +22,7 @@ import {
 	deleteRoom,
 	deleteRoomLeaderboard,
 	deleteSubRoom,
+	DORM_ROOM_SETTING_KEY,
 	findSubRoom,
 	getAccount,
 	getBakedUnityAssets,
@@ -31,8 +32,8 @@ import {
 	getFeaturedRooms,
 	getHotRooms,
 	getInteraction,
-	getOrCreateDormRoom,
 	getPlayerData,
+	getPlayerDormRoom,
 	getPlayerIdsInRoom,
 	getPresence,
 	getPublicRoomsByCreator,
@@ -54,8 +55,10 @@ import {
 	getVisitedRooms,
 	incrementRoomExperience,
 	inviteRoomRole,
+	isPickableDorm,
 	isPlayerBannedFromRoom,
 	isRoomOwner,
+	mergePlayerSettings,
 	MessageType,
 	modifySubRoom,
 	movePlayerToDorm,
@@ -120,6 +123,8 @@ import {
 	CuratedPlaylists,
 	DescriptionRequest,
 	DormRoomId,
+	DormRoomRequest,
+	DormRoomResult,
 	ExcludeRequest,
 	ExperienceIncrementRequest,
 	ExperienceRequest,
@@ -1192,8 +1197,7 @@ async function ownedRooms(c: Context<App>) {
 }
 
 /**
- * The caller's owned rooms, excluding their dorm. The dorm is auto-provisioned,
- * not a room the player made, so it doesn't belong in the "rooms you own" list.
+ * The caller's owned and co-owned rooms, excluding dorms — `contributedby/me` lists those.
  */
 async function ownedRoomsExcludingDorm(c: Context<App>) {
 	const accountId = await authedAccountId(c)
@@ -1201,7 +1205,7 @@ async function ownedRoomsExcludingDorm(c: Context<App>) {
 	const rooms = (await getContributedRooms(c.env.DB, accountId)).filter((room) =>
 		canManageRoom(room, accountId)
 	)
-	return c.json(serveRooms(rooms.filter((r) => r.IsDorm !== true)))
+	return c.json(serveRooms(rooms))
 }
 
 /** Suggestions `/rooms/autocomplete_search` returns when the client names no `take`. */
@@ -1812,8 +1816,8 @@ const app = new Hono<App>()
 	)
 
 	// Rooms created/owned by the caller. Auth-gated — no token is a 401, never
-	// account 1. `ownedby/me` drops the dorm (it's not a room the player made);
-	// the `createdby` variants return everything the account created. None of them
+	// account 1. `ownedby/me` drops dorms (`contributedby/me` lists them); the
+	// `createdby` variants return everything the account created. None of them
 	// filter on Accessibility: these are the owner's own "My Rooms" lists, so a room
 	// they haven't published yet (a fresh clone is Private) has to show up here.
 	// Only the public `ownedby/:accountId` profile list is accessibility-filtered.
@@ -1836,17 +1840,16 @@ const app = new Hono<App>()
 		'/rooms/ownedby/me',
 		describeRoute({
 			tags: ['My rooms'],
-			summary: 'Rooms the caller owns or co-owns (excluding their dorm)',
+			summary: 'Rooms the caller owns or co-owns (excluding dorms)',
 			description: [
-				'The caller’s created and accepted co-owned rooms with the dorm filtered out: a dorm is auto-provisioned, not a',
-				'room the player made, so it doesn’t belong in the “rooms you own” list. Use',
-				'`createdby/me` for everything the account created. Accessibility is deliberately NOT',
+				'The caller’s created and accepted co-owned rooms with dorms filtered out —',
+				'`contributedby/me` lists them. Accessibility is deliberately NOT',
 				'filtered — this is the owner’s own list, so unpublished (Private) rooms appear, unlike',
 				'the public `ownedby/{accountId}` profile list.',
 			].join(' '),
 			security: AUTHED,
 			responses: {
-				200: json(RoomDto.array(), 'The caller’s rooms, dorm excluded'),
+				200: json(RoomDto.array(), 'The caller’s rooms, dorms excluded'),
 				401: UNAUTHORIZED_RESPONSE,
 			},
 		}),
@@ -1871,9 +1874,10 @@ const app = new Hono<App>()
 	// Created rooms used to be excluded, on the grounds that a room's `Roles` names its
 	// creator too and the client shows "owned" and "contributed" separately. That left the
 	// list empty for every account that had only built its own rooms — most of them — so it
-	// now overlaps `createdby/me` rather than coming back empty. The dorm stays out, as it
-	// does on `ownedby/me`. Like the other `*by/me` lists it answers a bare array of the
-	// canonical room DTO — no envelope, no paging wrapper — and doesn't filter on
+	// now overlaps `createdby/me` rather than coming back empty. Dorms are listed — the
+	// provisioned one and custom ones cloned from a dorm — because the 2026 client shows
+	// them in a list built from this. Like the other `*by/me` lists it answers a bare
+	// array of the canonical room DTO — no envelope, no paging wrapper — and doesn't filter on
 	// accessibility, since a contributor is working on the room whether or not it's
 	// published.
 	.get(
@@ -1884,8 +1888,9 @@ const app = new Hono<App>()
 			description: [
 				'Every room the caller works on, as a bare array: the ones they CREATED plus the ones',
 				'that name them in their `Roles` — Host, Moderator or CoOwner. Overlaps',
-				'`createdby/me` deliberately, so a client rendering one list sees everything; the',
-				'dorm is excluded as it is on `ownedby/me`. Every role tier counts, not only the',
+				'`createdby/me` deliberately, so a client rendering one list sees everything. Dorms',
+				'are listed too: the provisioned dorm and any custom dorm cloned from one. Every',
+				'role tier counts, not only the',
 				'owner-level ones, and accessibility is not filtered: a contributor works on the room',
 				'whether or not it is published.',
 			].join(' '),
@@ -1898,16 +1903,20 @@ const app = new Hono<App>()
 		async (c) => {
 			const accountId = await authedAccountId(c)
 			if (accountId === null) return unauthorized(c)
-			return c.json(serveRooms(await getContributedRooms(c.env.DB, accountId)))
+			return c.json(
+				serveRooms(await getContributedRooms(c.env.DB, accountId, { includeDorms: true }))
+			)
 		}
 	)
 
 	// The caller's own dorm, as its ID ALONE — a bare JSON number, not the room. The
 	// caller follows up with `GET /rooms/{roomId}` when it wants the room itself.
 	//
-	// Gets-or-creates, exactly as entering a dorm does (`match`): the provisioning is the
-	// point of the call as much as the answer is, so a player who has never been to their
-	// dorm gets one minted here rather than a 404, and the id is stable from then on.
+	// The dorm the player picked with `PUT /dormroom/me` wins while it is still a dorm they
+	// run. Otherwise it gets-or-creates, exactly as entering a dorm does (`match`): the
+	// provisioning is the point of the call as much as the answer is, so a player who has
+	// never been to their dorm gets one minted here rather than a 404, and the id is stable
+	// from then on.
 	.get(
 		'/dormroom/me',
 		describeRoute({
@@ -1917,9 +1926,10 @@ const app = new Hono<App>()
 				'The `RoomId` of the caller’s personal dorm, as a bare JSON number — NOT the room:',
 				'fetch that from `GET /rooms/{roomId}` with the id this returns.',
 				'',
-				'The dorm is provisioned on first access (cloned from the seeded template dorm), so',
-				'this answers for any authed caller and never 404s, and calling it again returns the',
-				'same id.',
+				'The dorm picked with `PUT /dormroom/me` is served while it is still a dorm the caller',
+				'created or co-owns. Otherwise it is their provisioned dorm, created on first access',
+				'(cloned from the seeded template dorm), so this answers for any authed caller and',
+				'never 404s, and calling it again returns the same id.',
 			].join(' '),
 			security: AUTHED,
 			responses: { 200: json(DormRoomId, 'The caller’s dorm id'), 401: UNAUTHORIZED_RESPONSE },
@@ -1927,8 +1937,58 @@ const app = new Hono<App>()
 		async (c) => {
 			const accountId = await authedAccountId(c)
 			if (accountId === null) return unauthorized(c)
-			const dorm = await getOrCreateDormRoom(c.env.DB, accountId)
+			const dorm = await getPlayerDormRoom(c.env.DB, c.env.RECFLARE_PLAYER_SETTINGS, accountId)
 			return c.json(Number(dorm.RoomId))
+		}
+	)
+
+	// Pick which dorm is the caller's — the 2026 client lets a player make custom dorms (a
+	// clone of a dorm stays one) and choose between them. The pick is stored as one key in
+	// the player's settings map, and `GET /dormroom/me` serves it from then on. The reply is
+	// the picked id in the `{ Value, Success, Error, error_id }` envelope — unlike the GET,
+	// which answers the bare number.
+	.put(
+		'/dormroom/me',
+		describeRoute({
+			tags: ['My rooms'],
+			summary: 'Pick the caller’s dorm',
+			description: [
+				'Makes `roomId` the caller’s dorm: `GET /dormroom/me` returns it from then on. The',
+				'room must be a dorm (`IsDorm`) the caller created or co-owns. Answers the id as',
+				'`Value` in the `{ Value, Success, Error, error_id }` envelope — NOT the bare number',
+				'the GET answers. A refusal is the same envelope with `Value` null and the reason in',
+				'`Error`: a missing or non-numeric `roomId` is a 400, an unknown room a 404, and a',
+				'room that is not a dorm the caller runs a 403.',
+			].join(' '),
+			security: AUTHED,
+			requestBody: form(DormRoomRequest, 'The dorm to pick'),
+			responses: {
+				200: json(DormRoomResult, 'The picked dorm id under `Value`'),
+				400: json(DormRoomResult, 'Missing or non-numeric `roomId`'),
+				401: UNAUTHORIZED_RESPONSE,
+				403: json(DormRoomResult, 'Not a dorm, or not one the caller created or co-owns'),
+				404: json(DormRoomResult, 'No such room'),
+			},
+		}),
+		async (c) => {
+			const accountId = await authedAccountId(c)
+			if (accountId === null) return unauthorized(c)
+
+			const body = (await c.req.parseBody().catch(() => ({}))) as Record<string, unknown>
+			const raw = body.roomId ?? c.req.query('roomId')
+			const refuse = (status: 400 | 403 | 404, error: string) =>
+				c.json({ Value: null, Success: false, Error: error, error_id: null }, status)
+			const roomId = typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw) : NaN
+			if (Number.isNaN(roomId)) return refuse(400, 'A numeric roomId is required')
+
+			const room = await getRoomById(c.env.DB, roomId)
+			if (!room) return refuse(404, 'This room does not exist!')
+			if (!isPickableDorm(room, accountId)) return refuse(403, 'That is not one of your dorms!')
+
+			await mergePlayerSettings(c.env.RECFLARE_PLAYER_SETTINGS, accountId, {
+				[DORM_ROOM_SETTING_KEY]: String(roomId),
+			})
+			return c.json({ Value: roomId, Success: true, Error: null, error_id: null })
 		}
 	)
 
