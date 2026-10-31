@@ -90,6 +90,7 @@ import {
 	readAuthError,
 	roomsBase,
 	storageBase,
+	studioBase,
 } from './upstream'
 
 import type { Context } from 'hono'
@@ -228,6 +229,7 @@ const app = new Hono<App>()
 				rooms: roomsBase(c.env),
 				cdn: cdnBase(c.env),
 				storage: storageBase(c.env),
+				studio: studioBase(c.env),
 			},
 		})
 	})
